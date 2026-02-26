@@ -13,6 +13,7 @@ import (
 type viewerModel struct {
 	viewport viewport.Model
 	content  string
+	width    int
 	session  *data.SessionSummary
 	rounds   []data.Round
 	ready    bool
@@ -23,6 +24,7 @@ func newViewer() viewerModel {
 }
 
 func (v *viewerModel) setSize(width, height int) {
+	v.width = width
 	if !v.ready {
 		v.viewport = viewport.New(width, height)
 		v.viewport.SetContent(v.content)
@@ -30,6 +32,11 @@ func (v *viewerModel) setSize(width, height int) {
 	} else {
 		v.viewport.Width = width
 		v.viewport.Height = height
+		// Re-render with new width for wrapping.
+		if v.session != nil {
+			v.content = v.renderTranscript()
+			v.viewport.SetContent(v.content)
+		}
 	}
 }
 
@@ -75,6 +82,11 @@ func (v *viewerModel) renderTranscript() string {
 		return dimStyle.Render("Select a session to view")
 	}
 
+	w := v.width
+	if w <= 0 {
+		w = 80
+	}
+
 	var b strings.Builder
 	var totalUsage data.Usage
 
@@ -91,20 +103,32 @@ func (v *viewerModel) renderTranscript() string {
 				summary := contextSummary(r.UserMessage)
 				b.WriteString(dimStyle.Render("[CONTEXT] "+summary) + "\n\n")
 			} else {
-				b.WriteString(userLabelStyle.Render("[YOU]") + " " + r.UserMessage + "\n\n")
+				wrapped := wrapText(r.UserMessage, w-6) // 6 = "[YOU] " prefix
+				lines := strings.Split(wrapped, "\n")
+				b.WriteString(userLabelStyle.Render("[YOU]") + " " + lines[0] + "\n")
+				for _, l := range lines[1:] {
+					b.WriteString("      " + l + "\n")
+				}
+				b.WriteString("\n")
 			}
 		}
 
 		for _, tc := range r.ToolCalls {
 			line := fmt.Sprintf("[TOOL] %s: %s", tc.Name, tc.InputSummary)
-			b.WriteString(toolLabelStyle.Render(line) + "\n")
+			b.WriteString(toolLabelStyle.Render(wrapText(line, w)) + "\n")
 		}
 		if len(r.ToolCalls) > 0 {
 			b.WriteString("\n")
 		}
 
 		for _, text := range r.AssistantTexts {
-			b.WriteString(claudeLabelStyle.Render("[CLAUDE]") + " " + text + "\n\n")
+			wrapped := wrapText(text, w-9) // 9 = "[CLAUDE] " prefix
+			lines := strings.Split(wrapped, "\n")
+			b.WriteString(claudeLabelStyle.Render("[CLAUDE]") + " " + lines[0] + "\n")
+			for _, l := range lines[1:] {
+				b.WriteString("         " + l + "\n")
+			}
+			b.WriteString("\n")
 		}
 
 		if r.Usage.OutputTokens > 0 || r.Usage.InputTokens > 0 {
@@ -127,6 +151,46 @@ func (v *viewerModel) renderTranscript() string {
 		totalUsage.CacheRead, totalUsage.CacheCreation))
 
 	return b.String()
+}
+
+// wrapText hard-wraps text to fit within the given width.
+// It wraps on word boundaries when possible.
+func wrapText(text string, width int) string {
+	if width <= 0 {
+		return text
+	}
+	var result strings.Builder
+	for _, paragraph := range strings.Split(text, "\n") {
+		if result.Len() > 0 {
+			result.WriteByte('\n')
+		}
+		if len(paragraph) <= width {
+			result.WriteString(paragraph)
+			continue
+		}
+		line := ""
+		for _, word := range strings.Fields(paragraph) {
+			if line == "" {
+				line = word
+			} else if len(line)+1+len(word) <= width {
+				line += " " + word
+			} else {
+				result.WriteString(line)
+				result.WriteByte('\n')
+				line = word
+			}
+			// Handle single words longer than width.
+			for len(line) > width {
+				result.WriteString(line[:width])
+				result.WriteByte('\n')
+				line = line[width:]
+			}
+		}
+		if line != "" {
+			result.WriteString(line)
+		}
+	}
+	return result.String()
 }
 
 // contextSummary returns a short description for system-injected context.

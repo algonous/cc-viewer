@@ -229,7 +229,11 @@ func (m Model) View() string {
 	sep := separatorStyle.Render("|")
 
 	// Header row -- pad plain text first, then apply style.
-	sidebarHeader := padRight(" Sessions", sidebarWidth)
+	sidebarHeader := " Sessions"
+	if sess := m.sidebar.selected(); sess != nil {
+		sidebarHeader = " " + sess.SessionID
+	}
+	sidebarHeader = padRight(sidebarHeader, sidebarWidth)
 	viewerHeader := " Transcript"
 
 	var b strings.Builder
