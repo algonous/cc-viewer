@@ -83,9 +83,55 @@ func ExportSessionMarkdown(configDir string, session SessionSummary, transcript 
 	}
 	defer f.Close()
 
+	b := GenerateMarkdown(session, transcript, indices, includeThinking)
+	if _, err := f.Write(b); err != nil {
+		return "", err
+	}
+
+	return outPath, nil
+}
+
+// GenerateJSONL returns JSONL bytes for the given session/transcript.
+func GenerateJSONL(session SessionSummary, transcript *Transcript, indices []int, includeThinking bool) []byte {
+	var buf strings.Builder
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+
+	rounds := selectRounds(transcript.Rounds, indices)
+	for _, r := range rounds {
+		tools := make([]ExportTool, len(r.ToolCalls))
+		for i, tc := range r.ToolCalls {
+			tools[i] = ExportTool{Name: tc.Name, InputSummary: tc.InputSummary}
+		}
+		er := ExportRound{
+			SessionID:         session.SessionID,
+			Timestamp:         r.UserTimestamp,
+			Project:           session.Project,
+			RoundIndex:        r.Index,
+			IsContext:         r.IsContext,
+			UserMessage:       r.UserMessage,
+			ToolCalls:         tools,
+			AssistantResponse: strings.Join(r.AssistantTexts, "\n"),
+			Usage: ExportUsage{
+				InputTokens:   r.Usage.InputTokens,
+				OutputTokens:  r.Usage.OutputTokens,
+				CacheRead:     r.Usage.CacheRead,
+				CacheCreation: r.Usage.CacheCreation,
+			},
+		}
+		if includeThinking && len(r.ThinkingTexts) > 0 {
+			er.ThinkingTexts = r.ThinkingTexts
+		}
+		enc.Encode(er)
+	}
+	return []byte(buf.String())
+}
+
+// GenerateMarkdown returns markdown bytes for the given session/transcript.
+func GenerateMarkdown(session SessionSummary, transcript *Transcript, indices []int, includeThinking bool) []byte {
+	var buf strings.Builder
 	rounds := selectRounds(transcript.Rounds, indices)
 
-	// Header.
 	var totalUsage Usage
 	for _, r := range rounds {
 		totalUsage.InputTokens += r.Usage.InputTokens
@@ -94,49 +140,49 @@ func ExportSessionMarkdown(configDir string, session SessionSummary, transcript 
 		totalUsage.CacheRead += r.Usage.CacheRead
 	}
 
-	fmt.Fprintf(f, "# Session %s\n\n", session.SessionID)
-	fmt.Fprintf(f, "- **Project**: %s\n", session.Project)
-	fmt.Fprintf(f, "- **Rounds**: %d\n", len(rounds))
-	fmt.Fprintf(f, "- **Total tokens**: in=%d out=%d cache_read=%d cache_write=%d\n\n",
+	fmt.Fprintf(&buf, "# Session %s\n\n", session.SessionID)
+	fmt.Fprintf(&buf, "- **Project**: %s\n", session.Project)
+	fmt.Fprintf(&buf, "- **Rounds**: %d\n", len(rounds))
+	fmt.Fprintf(&buf, "- **Total tokens**: in=%d out=%d cache_read=%d cache_write=%d\n\n",
 		totalUsage.InputTokens, totalUsage.OutputTokens, totalUsage.CacheRead, totalUsage.CacheCreation)
-	fmt.Fprintf(f, "---\n\n")
+	fmt.Fprintf(&buf, "---\n\n")
 
 	for _, r := range rounds {
 		ts := r.UserTimestamp
 		if ts == "" {
 			ts = "unknown"
 		}
-		fmt.Fprintf(f, "## Round %d (%s)\n\n", r.Index+1, ts)
+		fmt.Fprintf(&buf, "## Round %d (%s)\n\n", r.Index+1, ts)
 
 		if r.UserMessage != "" {
-			fmt.Fprintf(f, "```prompt\n%s\n```\n\n", r.UserMessage)
+			fmt.Fprintf(&buf, "```prompt\n%s\n```\n\n", r.UserMessage)
 		}
 
 		if len(r.ToolCalls) > 0 {
-			fmt.Fprintf(f, "```tool_use\n")
+			fmt.Fprintf(&buf, "```tool_use\n")
 			for _, tc := range r.ToolCalls {
 				if tc.InputSummary != "" {
-					fmt.Fprintf(f, "%s: %s\n", tc.Name, tc.InputSummary)
+					fmt.Fprintf(&buf, "%s: %s\n", tc.Name, tc.InputSummary)
 				} else {
-					fmt.Fprintf(f, "%s\n", tc.Name)
+					fmt.Fprintf(&buf, "%s\n", tc.Name)
 				}
 			}
-			fmt.Fprintf(f, "```\n\n")
+			fmt.Fprintf(&buf, "```\n\n")
 		}
 
 		if includeThinking && len(r.ThinkingTexts) > 0 {
-			fmt.Fprintf(f, "```thinking\n%s\n```\n\n", strings.Join(r.ThinkingTexts, "\n\n"))
+			fmt.Fprintf(&buf, "```thinking\n%s\n```\n\n", strings.Join(r.ThinkingTexts, "\n\n"))
 		}
 
 		if len(r.AssistantTexts) > 0 {
-			fmt.Fprintf(f, "```assistant\n%s\n```\n\n", strings.Join(r.AssistantTexts, "\n"))
+			fmt.Fprintf(&buf, "```assistant\n%s\n```\n\n", strings.Join(r.AssistantTexts, "\n"))
 		}
 
-		fmt.Fprintf(f, "> Tokens: in=%d out=%d cache_read=%d cache_write=%d\n\n",
+		fmt.Fprintf(&buf, "> Tokens: in=%d out=%d cache_read=%d cache_write=%d\n\n",
 			r.Usage.InputTokens, r.Usage.OutputTokens, r.Usage.CacheRead, r.Usage.CacheCreation)
 	}
 
-	return outPath, nil
+	return []byte(buf.String())
 }
 
 // selectRounds returns the subset of rounds at the given indices, or all rounds if indices is nil.

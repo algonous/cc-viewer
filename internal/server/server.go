@@ -42,7 +42,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/sessions", s.handleSessions)
 	mux.HandleFunc("GET /api/transcript/{id}", s.handleTranscript)
 	mux.HandleFunc("POST /api/export", s.handleExport)
-	mux.HandleFunc("GET /api/export/download/{filename}", s.handleDownload)
 
 	return mux
 }
@@ -93,11 +92,6 @@ type exportRequest struct {
 	Format          string `json:"format"`
 	RoundIndices    []int  `json:"round_indices,omitempty"`
 	IncludeThinking bool   `json:"include_thinking"`
-}
-
-type exportResponse struct {
-	Path     string `json:"path"`
-	Filename string `json:"filename"`
 }
 
 // --- Handlers ---
@@ -198,46 +192,28 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	configDir := data.ConfigDir()
-
 	var indices []int
 	if len(req.RoundIndices) > 0 {
 		indices = req.RoundIndices
 	}
 
-	var outPath string
+	var content []byte
+	var filename string
+	var contentType string
 	switch req.Format {
 	case "md":
-		outPath, err = data.ExportSessionMarkdown(configDir, session, transcript, indices, req.IncludeThinking)
+		content = data.GenerateMarkdown(session, transcript, indices, req.IncludeThinking)
+		filename = req.SessionID + ".md"
+		contentType = "text/markdown; charset=utf-8"
 	default:
-		outPath, err = data.ExportSessionRounds(configDir, session, transcript, indices, req.IncludeThinking)
-	}
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		content = data.GenerateJSONL(session, transcript, indices, req.IncludeThinking)
+		filename = req.SessionID + ".jsonl"
+		contentType = "application/x-ndjson"
 	}
 
-	// Extract filename from path.
-	parts := strings.Split(outPath, "/")
-	filename := parts[len(parts)-1]
-
-	writeJSON(w, exportResponse{Path: outPath, Filename: filename})
-}
-
-func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
-	filename := r.PathValue("filename")
-
-	// Prevent path traversal.
-	if strings.Contains(filename, "/") || strings.Contains(filename, "..") {
-		http.Error(w, "invalid filename", http.StatusBadRequest)
-		return
-	}
-
-	configDir := data.ConfigDir()
-	filePath := configDir + "/exports/" + filename
-
+	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
-	http.ServeFile(w, r, filePath)
+	w.Write(content)
 }
 
 // --- Rendering ---

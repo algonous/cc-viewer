@@ -48,10 +48,21 @@ function doExport() {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body),
-  }).then(function(r) { return r.json(); }).then(function(data) {
-    if (data.path) {
-      setStatus('Exported: ' + data.path);
-    }
+  }).then(function(r) {
+    var disposition = r.headers.get('Content-Disposition') || '';
+    var match = disposition.match(/filename="?([^"]+)"?/);
+    var filename = match ? match[1] : state.currentSession.session_id + '.' + state.exportFormat;
+    return r.blob().then(function(blob) { return {blob: blob, filename: filename}; });
+  }).then(function(result) {
+    var url = URL.createObjectURL(result.blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = result.filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setStatus('Downloaded: ' + result.filename);
   });
   closeExportModal();
 }
