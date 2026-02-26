@@ -34,10 +34,11 @@ type transcriptUsage struct {
 
 // contentBlock is one element of the assistant message content array.
 type contentBlock struct {
-	Type    string          `json:"type"`
-	Text    string          `json:"text,omitempty"`
-	Name    string          `json:"name,omitempty"`
-	Input   json.RawMessage `json:"input,omitempty"`
+	Type     string          `json:"type"`
+	Text     string          `json:"text,omitempty"`
+	Thinking string          `json:"thinking,omitempty"`
+	Name     string          `json:"name,omitempty"`
+	Input    json.RawMessage `json:"input,omitempty"`
 }
 
 // LoadTranscript parses a transcript JSONL file into rounds.
@@ -150,11 +151,14 @@ func handleAssistantEntry(t *Transcript, entry *transcriptEntry) {
 					if b.Text != "" {
 						r.AssistantTexts = append(r.AssistantTexts, b.Text)
 					}
+				case "thinking":
+					if b.Thinking != "" {
+						r.ThinkingTexts = append(r.ThinkingTexts, b.Thinking)
+					}
 				case "tool_use":
 					tc := ToolCall{Name: b.Name, InputSummary: toolInputSummary(b.Name, b.Input)}
 					r.ToolCalls = append(r.ToolCalls, tc)
 				}
-				// Skip "thinking" and other block types.
 			}
 		}
 	}

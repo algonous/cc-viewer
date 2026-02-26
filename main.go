@@ -1,15 +1,20 @@
 package main
 
 import (
+	"embed"
 	"flag"
 	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/kfu/cc-tree/internal/data"
-	"github.com/kfu/cc-tree/internal/tui"
+	"github.com/kfu/cc-viewer/internal/data"
+	"github.com/kfu/cc-viewer/internal/server"
 )
+
+//go:embed web
+var webFS embed.FS
 
 func main() {
 	home, err := os.UserHomeDir()
@@ -19,6 +24,7 @@ func main() {
 	}
 
 	claudeDir := flag.String("claude-dir", filepath.Join(home, ".claude"), "path to Claude data directory")
+	addr := flag.String("addr", "127.0.0.1:0", "listen address (host:port, use port 0 for auto)")
 	flag.Parse()
 
 	sessions, err := data.LoadSessions(*claudeDir)
@@ -32,9 +38,18 @@ func main() {
 		os.Exit(0)
 	}
 
-	m := tui.New(*claudeDir, sessions)
-	p := tea.NewProgram(m, tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
+	srv := server.New(*claudeDir, sessions, webFS)
+
+	ln, err := net.Listen("tcp", *addr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	url := fmt.Sprintf("http://%s", ln.Addr().String())
+	fmt.Printf("cc-viewer serving %d sessions at %s\n", len(sessions), url)
+
+	if err := http.Serve(ln, srv.Handler()); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}

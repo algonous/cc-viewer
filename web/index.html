@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>cc-viewer</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div id="app">
+  <div id="sidebar">
+    <div id="sidebar-header">
+      <input id="filter-input" type="text" placeholder="filter..." autocomplete="off" spellcheck="false">
+    </div>
+    <div id="session-list"></div>
+  </div>
+  <div id="viewer">
+    <div id="viewer-header">
+      <span id="viewer-title"></span>
+      <div id="viewer-toolbar">
+        <span id="selection-actions" class="hidden">
+          <button id="btn-dump" class="toolbar-btn" title="Copy selected blocks to clipboard">Dump</button>
+          <button id="btn-clear" class="toolbar-btn" title="Clear all selections">Clear</button>
+        </span>
+        <button id="btn-export" class="toolbar-btn" title="Export session">Export</button>
+      </div>
+    </div>
+    <div id="viewer-content"></div>
+  </div>
+</div>
+<div id="status-bar"></div>
+<div id="export-modal" class="modal hidden">
+  <div class="modal-content">
+    <div class="modal-title">Export</div>
+    <div class="modal-options">
+      <button data-format="jsonl" class="modal-btn selected">JSONL</button>
+      <button data-format="md" class="modal-btn">Markdown</button>
+    </div>
+    <label class="modal-check">
+      <input type="checkbox" id="export-thinking" checked> Include thinking
+    </label>
+    <div class="modal-actions">
+      <button id="export-confirm" class="modal-btn primary">Export</button>
+      <button id="export-cancel" class="modal-btn">Cancel</button>
+    </div>
+  </div>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

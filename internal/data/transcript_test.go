@@ -51,6 +51,9 @@ func TestLoadTranscript(t *testing.T) {
 	if len(r0.AssistantTexts) != 2 {
 		t.Errorf("round 0 expected 2 assistant texts, got %d", len(r0.AssistantTexts))
 	}
+	if len(r0.ThinkingTexts) != 1 || r0.ThinkingTexts[0] != "hmm" {
+		t.Errorf("round 0 thinking texts = %v, want [hmm]", r0.ThinkingTexts)
+	}
 	if len(r0.ToolCalls) != 1 {
 		t.Fatalf("round 0 expected 1 tool call, got %d", len(r0.ToolCalls))
 	}

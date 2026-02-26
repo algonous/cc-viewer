@@ -18,6 +18,7 @@ type Round struct {
 	UserTimestamp  string
 	IsContext      bool // true if UserMessage is system-injected context, not user input
 	AssistantTexts []string
+	ThinkingTexts  []string
 	ToolCalls      []ToolCall
 	Usage          Usage // aggregated across all assistant entries in this round
 }
@@ -52,6 +53,7 @@ type ExportRound struct {
 	UserMessage       string       `json:"user_message"`
 	ToolCalls         []ExportTool `json:"tool_calls"`
 	AssistantResponse string       `json:"assistant_response"`
+	ThinkingTexts     []string     `json:"thinking_texts,omitempty"`
 	Usage             ExportUsage  `json:"usage"`
 }
 

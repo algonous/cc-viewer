@@ -1,5 +1,5 @@
 BIN ?= $(HOME)/.local/bin
-BINARY = cc-tree
+BINARY = cc-viewer
 
 .PHONY: all test build clean
 
