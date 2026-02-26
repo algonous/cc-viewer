@@ -9,8 +9,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/kfu/cc-viewer/internal/data"
-	"github.com/kfu/cc-viewer/internal/server"
+	"github.com/algonous/cc-viewer/internal/data"
+	"github.com/algonous/cc-viewer/internal/server"
 )
 
 //go:embed web

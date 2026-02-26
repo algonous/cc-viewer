@@ -5,21 +5,16 @@
 }
 
 :root {
-  --bg: #f0f4f5;
-  --bg-surface: #e6ecee;
-  --bg-hover: #dce4e6;
-  --bg-selected: #d2dcdf;
-  --border: #c0cacf;
-  --text: #2a3338;
-  --text-dim: #6b7a80;
-  --text-muted: #8d9da3;
-  --green: #3a7868;
-  --orange: #987040;
-  --purple: #6a5a8a;
-  --cyan: #3a7888;
-  --blue: #48789a;
-  --red: #985050;
-  --yellow: #7a7030;
+  --bg: #f5f5f3;
+  --bg-surface: #eeecea;
+  --bg-hover: #e5e3e0;
+  --bg-selected: #dddbd8;
+  --border: #ddd;
+  --text: #1a1a1a;
+  --text-dim: #4b5563;
+  --text-muted: #9ca3af;
+  --accent: #3b82f6;
+  --link: #0366d6;
   --header-height: 40px;
 }
 
@@ -59,7 +54,7 @@ html, body {
 
 #filter-input {
   width: 100%;
-  background: var(--bg-surface);
+  background: #fff;
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--text);
@@ -70,7 +65,7 @@ html, body {
 }
 
 #filter-input:focus {
-  border-color: var(--cyan);
+  border-color: var(--accent);
 }
 
 #session-list {
@@ -90,18 +85,18 @@ html, body {
 
 .session-item.active {
   background: var(--bg-selected);
-  border-left: 3px solid var(--cyan);
+  border-left: 3px solid var(--accent);
   padding-left: 9px;
 }
 
 .session-project {
-  color: var(--cyan);
+  color: #1e40af;
   font-weight: bold;
   font-size: 13px;
 }
 
 .session-time {
-  color: var(--text-dim);
+  color: var(--text-muted);
   font-size: 11px;
   margin-left: 8px;
 }
@@ -151,7 +146,7 @@ html, body {
 }
 
 .toolbar-btn {
-  background: var(--bg-surface);
+  background: #fff;
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--text-dim);
@@ -183,7 +178,7 @@ html, body {
   padding: 12px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--bg-surface);
+  background: #fff;
 }
 
 .round-header {
@@ -194,12 +189,12 @@ html, body {
 }
 
 .round-index {
-  color: var(--cyan);
+  color: #1e40af;
   font-weight: bold;
 }
 
 .round-timestamp {
-  color: var(--text-dim);
+  color: var(--text-muted);
   font-size: 11px;
 }
 
@@ -216,11 +211,11 @@ html, body {
   margin: 0.5em 0;
   border-radius: 4px;
   border-left: 4px solid var(--border);
-  background: var(--bg);
+  background: #fafafa;
 }
 
 .chat-block.block-checked {
-  outline: 2px solid var(--cyan);
+  outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
 
@@ -238,7 +233,7 @@ html, body {
 }
 
 .block-checkbox {
-  accent-color: var(--cyan);
+  accent-color: var(--accent);
   cursor: pointer;
   flex-shrink: 0;
 }
@@ -288,54 +283,54 @@ html, body {
   display: block;
 }
 
-/* YOU -- teal */
+/* YOU / PROMPT -- amber */
 .chat-you {
-  border-left-color: #508a80;
-  background: #e8f0ee;
+  border-left-color: #d97706;
+  background: #fefce8;
 }
 
 .chat-you .chat-role {
-  color: var(--green);
+  color: #854d0e;
 }
 
-/* CLAUDE -- muted blue-violet */
+/* CLAUDE / AGENT -- blue */
 .chat-claude {
-  border-left-color: #7a7098;
-  background: #eceaf0;
+  border-left-color: #3b82f6;
+  background: #eff6ff;
 }
 
 .chat-claude .chat-role {
-  color: var(--purple);
+  color: #1e40af;
 }
 
-/* TOOL -- warm gray */
+/* TOOL -- green */
 .chat-tool {
-  border-left-color: #a89070;
-  background: #eeece8;
+  border-left-color: #22c55e;
+  background: #f0fdf4;
 }
 
 .chat-tool .chat-role {
-  color: var(--orange);
+  color: #166534;
 }
 
-/* CONTEXT -- cool gray */
+/* CONTEXT -- purple */
 .chat-context {
-  border-left-color: var(--text-muted);
-  background: #e8ecee;
+  border-left-color: #a78bfa;
+  background: #f5f3ff;
 }
 
 .chat-context .chat-role {
-  color: var(--text-muted);
+  color: #5b21b6;
 }
 
-/* THINKING -- cool gray italic */
+/* THINKING -- gray */
 .chat-thinking {
-  border-left-color: var(--text-muted);
-  background: #e8ecee;
+  border-left-color: #9ca3af;
+  background: #f9fafb;
 }
 
 .chat-thinking .chat-role {
-  color: var(--text-muted);
+  color: #4b5563;
   font-style: italic;
 }
 
@@ -358,7 +353,7 @@ html, body {
 }
 
 .tool-name {
-  color: var(--orange);
+  color: #166534;
   font-weight: 600;
   flex-shrink: 0;
 }
@@ -384,7 +379,7 @@ html, body {
 }
 
 .fold-body a {
-  color: var(--blue);
+  color: var(--link);
   text-decoration: none;
 }
 
@@ -393,8 +388,8 @@ html, body {
 }
 
 .fold-body pre {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
+  background: #f6f8fa;
+  border: 1px solid #e1e4e8;
   border-radius: 4px;
   padding: 0.6em;
   overflow-x: auto;
@@ -412,7 +407,7 @@ html, body {
 .fold-body code {
   font-family: inherit;
   font-size: 12px;
-  background: var(--bg-hover);
+  background: #e8e8e8;
   padding: 0.1em 0.3em;
   border-radius: 3px;
 }
@@ -464,7 +459,7 @@ html, body {
 }
 
 .fold-body th {
-  background: var(--bg-hover);
+  background: #f6f8fa;
   font-weight: 600;
 }
 
@@ -496,7 +491,7 @@ html, body {
 }
 
 .modal-content {
-  background: var(--bg);
+  background: #fff;
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 20px;
@@ -518,7 +513,7 @@ html, body {
 }
 
 .modal-btn {
-  background: var(--bg-surface);
+  background: #fff;
   border: 1px solid var(--border);
   border-radius: 4px;
   color: var(--text);
@@ -533,14 +528,14 @@ html, body {
 }
 
 .modal-btn.selected {
-  border-color: var(--cyan);
-  background: var(--bg-selected);
+  border-color: var(--accent);
+  background: #eff6ff;
 }
 
 .modal-btn.primary {
-  background: #d8e6ea;
-  border-color: var(--cyan);
-  color: var(--cyan);
+  background: #eff6ff;
+  border-color: var(--accent);
+  color: #1e40af;
 }
 
 .modal-check {
@@ -554,7 +549,7 @@ html, body {
 }
 
 .modal-check input {
-  accent-color: var(--cyan);
+  accent-color: var(--accent);
 }
 
 .modal-actions {

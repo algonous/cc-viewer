@@ -1,2 +1,4 @@
+github.com/algonous/md2html v0.0.1 h1:YHXYntW4p6mTi6zDwisvAAfbUd4DV9q4fjfkESEg4Wg=
+github.com/algonous/md2html v0.0.1/go.mod h1:oucEQgAl+VnTFPmT8SeAJ+DK7t9gcN4NEYNdIzcCqXk=
 github.com/yuin/goldmark v1.7.16 h1:n+CJdUxaFMiDUNnWC3dMWCIQJSkxH4uz3ZwQBkAlVNE=
 github.com/yuin/goldmark v1.7.16/go.mod h1:ip/1k0VRfGynBgxOz0yCqHrbZXhcjxyuS66Brc7iBKg=

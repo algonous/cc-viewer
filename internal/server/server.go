@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/kfu/cc-viewer/internal/data"
-	"md2html/md2html"
+	"github.com/algonous/cc-viewer/internal/data"
+	"github.com/algonous/md2html/md2html"
 )
 
 // Server handles HTTP requests for the cc-viewer web UI.
