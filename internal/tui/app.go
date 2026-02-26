@@ -65,7 +65,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		contentHeight := m.height - 2 // header + status bar
+		contentHeight := m.height - 3 // header + border + status bar
 		viewerWidth := m.width - sidebarWidth - 1 // 1 for separator
 		m.sidebar.height = contentHeight
 		m.viewer.setSize(viewerWidth, contentHeight)
@@ -152,7 +152,29 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case msg.String() == "d":
+		if m.viewer.selectMode && m.viewer.selectedCount() > 0 {
+			return m, m.exportSelectedRounds()
+		}
 		return m, m.exportSelected()
+	}
+
+	// Select mode in viewer.
+	if m.focus == focusViewer && m.viewer.selectMode {
+		switch msg.String() {
+		case "esc":
+			m.viewer.exitSelectMode()
+			return m, nil
+		case "j", "down":
+			m.viewer.moveCursorDown()
+			return m, nil
+		case "k", "up":
+			m.viewer.moveCursorUp()
+			return m, nil
+		case " ":
+			m.viewer.toggleSelection()
+			return m, nil
+		}
+		return m, nil
 	}
 
 	if m.focus == focusSidebar {
@@ -169,6 +191,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.focus == focusViewer {
+		switch msg.String() {
+		case "s":
+			m.viewer.enterSelectMode()
+			return m, nil
+		}
 		cmd := m.viewer.update(msg)
 		return m, cmd
 	}
@@ -220,21 +247,42 @@ func (m *Model) exportSelected() tea.Cmd {
 	}
 }
 
+func (m *Model) exportSelectedRounds() tea.Cmd {
+	sess := m.sidebar.selected()
+	if sess == nil {
+		m.status = "No session selected"
+		return nil
+	}
+	rounds := m.viewer.selectedRounds()
+	if len(rounds) == 0 {
+		m.status = "No rounds selected"
+		return nil
+	}
+	s := *sess
+	r := make([]data.Round, len(rounds))
+	copy(r, rounds)
+	return func() tea.Msg {
+		t := &data.Transcript{SessionID: s.SessionID, Rounds: r}
+		outPath, err := data.ExportSession(data.ConfigDir(), s, t)
+		return exportDoneMsg{path: outPath, err: err}
+	}
+}
+
 func (m Model) View() string {
 	if m.width == 0 {
 		return "Initializing..."
 	}
 
-	contentHeight := m.height - 2 // header + status bar
+	contentHeight := m.height - 3 // header + border + status bar
 	sep := separatorStyle.Render("|")
 
-	// Header row -- pad plain text first, then apply style.
+	// Header row -- session ID left, summary right.
 	sidebarHeader := " Sessions"
 	if sess := m.sidebar.selected(); sess != nil {
 		sidebarHeader = " " + sess.SessionID
 	}
 	sidebarHeader = padRight(sidebarHeader, sidebarWidth)
-	viewerHeader := " Transcript"
+	viewerHeader := " " + m.viewer.summaryLine()
 
 	var b strings.Builder
 	if m.focus == focusSidebar {
@@ -246,6 +294,13 @@ func (m Model) View() string {
 		b.WriteString(sep)
 		b.WriteString(headerActiveStyle.Render(viewerHeader))
 	}
+	b.WriteString("\n")
+
+	// Border line under header.
+	viewerWidth := m.width - sidebarWidth - 1
+	b.WriteString(padRight("", sidebarWidth))
+	b.WriteString(sep)
+	b.WriteString(separatorStyle.Render(strings.Repeat("-", viewerWidth)))
 	b.WriteString("\n")
 
 	sidebarLines := m.sidebar.viewLines(m.focus == focusSidebar)
@@ -271,7 +326,13 @@ func (m Model) View() string {
 		b.WriteString("\n")
 	}
 
-	status := "h/l:switch  j/k:navigate  d:export  /:filter  q:quit"
+	var status string
+	if m.viewer.selectMode {
+		n := m.viewer.selectedCount()
+		status = fmt.Sprintf("SELECT: j/k:move  space:toggle  d:export(%d)  esc:cancel", n)
+	} else {
+		status = "h/l:switch  j/k:navigate  s:select  d:export  /:filter  q:quit"
+	}
 	if m.status != "" {
 		status = m.status + "  |  " + status
 	}
