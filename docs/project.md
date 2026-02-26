@@ -1,4 +1,4 @@
-# cc-tree: Claude Code Session Browser
+# cc-viewer: Claude Code Session Browser
 
 ## Overview
 
