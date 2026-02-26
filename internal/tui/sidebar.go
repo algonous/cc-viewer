@@ -63,7 +63,7 @@ func (s *sidebarModel) moveDown() {
 }
 
 func (s *sidebarModel) visibleCount() int {
-	// Each item takes 2 lines + 1 blank = 3 lines; last item no trailing blank.
+	// Each item takes 2 lines + 1 blank = 3 lines.
 	if s.height <= 0 {
 		return 10
 	}
@@ -82,11 +82,13 @@ func (s *sidebarModel) selected() *data.SessionSummary {
 	return &s.sessions[idx]
 }
 
-func (s *sidebarModel) view(focused bool) string {
-	var b strings.Builder
+// viewLines returns exactly `height` lines of sidebar content, each padded to sidebarWidth.
+func (s *sidebarModel) viewLines(focused bool) []string {
+	var lines []string
 
 	if s.filtering {
-		b.WriteString("Filter: " + s.filterText + "_\n\n")
+		lines = append(lines, padRight("Filter: "+s.filterText+"_", sidebarWidth))
+		lines = append(lines, padRight("", sidebarWidth))
 	}
 
 	visible := s.visibleCount()
@@ -102,33 +104,47 @@ func (s *sidebarModel) view(focused bool) string {
 
 		ts := time.UnixMilli(sess.LastTS).Format("01/02 15:04")
 		label := fmt.Sprintf("%-16s %s", truncate(sess.ProjectName, 16), ts)
-		msg := truncate(sess.FirstMessage, 36)
+		msg := truncate(sess.FirstMessage, sidebarWidth-5)
+
+		line1 := padRight("  "+label, sidebarWidth)
+		line2 := padRight("  \""+msg+"\"", sidebarWidth)
+		if isCurrent {
+			line1 = padRight("> "+label, sidebarWidth)
+		}
 
 		if isCurrent && focused {
-			b.WriteString(selectedStyle.Render("> "+label) + "\n")
-			b.WriteString(selectedStyle.Render("  \""+msg+"\"") + "\n")
+			lines = append(lines, selectedStyle.Render(line1))
+			lines = append(lines, selectedStyle.Render(line2))
 		} else if isCurrent {
-			b.WriteString("> " + label + "\n")
-			b.WriteString("  \"" + msg + "\"\n")
+			lines = append(lines, line1)
+			lines = append(lines, line2)
 		} else {
-			b.WriteString(dimStyle.Render("  "+label) + "\n")
-			b.WriteString(dimStyle.Render("  \""+msg+"\"") + "\n")
+			lines = append(lines, dimStyle.Render(line1))
+			lines = append(lines, dimStyle.Render(line2))
 		}
 
 		if vi < end-1 {
-			b.WriteString("\n")
+			lines = append(lines, padRight("", sidebarWidth))
 		}
 	}
 
 	if len(s.filtered) == 0 {
-		b.WriteString(dimStyle.Render("  (no sessions)"))
+		lines = append(lines, dimStyle.Render(padRight("  (no sessions)", sidebarWidth)))
 	}
 
-	return b.String()
+	// Pad to exactly height lines.
+	for len(lines) < s.height {
+		lines = append(lines, padRight("", sidebarWidth))
+	}
+	// Truncate if somehow over.
+	if len(lines) > s.height {
+		lines = lines[:s.height]
+	}
+
+	return lines
 }
 
 func truncate(s string, max int) string {
-	// Truncate to single line first.
 	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
 		s = s[:idx]
 	}
@@ -136,4 +152,11 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return s[:max-3] + "..."
+}
+
+func padRight(s string, width int) string {
+	if len(s) >= width {
+		return s[:width]
+	}
+	return s + strings.Repeat(" ", width-len(s))
 }

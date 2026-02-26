@@ -39,6 +39,7 @@ func ExportSession(configDir string, session SessionSummary, transcript *Transcr
 			Timestamp:         r.UserTimestamp,
 			Project:           session.Project,
 			RoundIndex:        r.Index,
+			IsContext:         r.IsContext,
 			UserMessage:       r.UserMessage,
 			ToolCalls:         tools,
 			AssistantResponse: strings.Join(r.AssistantTexts, "\n"),

@@ -16,6 +16,7 @@ type Round struct {
 	Index          int
 	UserMessage    string
 	UserTimestamp  string
+	IsContext      bool // true if UserMessage is system-injected context, not user input
 	AssistantTexts []string
 	ToolCalls      []ToolCall
 	Usage          Usage // aggregated across all assistant entries in this round
@@ -47,6 +48,7 @@ type ExportRound struct {
 	Timestamp         string       `json:"timestamp"`
 	Project           string       `json:"project"`
 	RoundIndex        int          `json:"round_index"`
+	IsContext         bool         `json:"is_context"`
 	UserMessage       string       `json:"user_message"`
 	ToolCalls         []ExportTool `json:"tool_calls"`
 	AssistantResponse string       `json:"assistant_response"`

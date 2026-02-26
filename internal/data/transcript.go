@@ -112,6 +112,7 @@ func handleUserEntry(t *Transcript, entry *transcriptEntry, currentRound *Round,
 			Index:         *roundIndex,
 			UserMessage:   text,
 			UserTimestamp:  entry.Timestamp,
+			IsContext:      isSystemContext(text),
 		}
 		*roundIndex++
 		t.Rounds = append(t.Rounds, r)
@@ -173,6 +174,13 @@ func handleAssistantEntry(t *Transcript, entry *transcriptEntry) {
 			r.Usage.CacheRead = msg.Usage.CacheReadInputTokens
 		}
 	}
+}
+
+// isSystemContext detects user messages that are system-injected context
+// rather than actual user input.
+func isSystemContext(text string) bool {
+	return strings.HasPrefix(text, "This session is being continued from a previous conversation") ||
+		strings.HasPrefix(text, "Implement the following plan:")
 }
 
 // toolInputSummary extracts a short summary from tool input JSON.

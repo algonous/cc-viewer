@@ -2,9 +2,9 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/kfu/cc-tree/internal/data"
 )
 
@@ -65,11 +65,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		sidebarWidth := 42 // 40 + 2 for border
-		viewerWidth := m.width - sidebarWidth
-		viewerHeight := m.height - 2 // status bar
-		m.sidebar.height = viewerHeight
-		m.viewer.setSize(viewerWidth, viewerHeight)
+		contentHeight := m.height - 2 // header + status bar
+		viewerWidth := m.width - sidebarWidth - 1 // 1 for separator
+		m.sidebar.height = contentHeight
+		m.viewer.setSize(viewerWidth, contentHeight)
 		return m, nil
 
 	case tea.KeyMsg:
@@ -137,6 +136,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.focus = focusSidebar
 		}
+		return m, nil
+
+	case msg.String() == "l" && m.focus == focusSidebar:
+		m.focus = focusViewer
+		return m, nil
+
+	case msg.String() == "h" && m.focus == focusViewer:
+		m.focus = focusSidebar
 		return m, nil
 
 	case msg.String() == "/":
@@ -218,18 +225,53 @@ func (m Model) View() string {
 		return "Initializing..."
 	}
 
-	sidebarContent := m.sidebar.view(m.focus == focusSidebar)
-	sidebarRendered := sidebarStyle.Height(m.height - 2).Render(sidebarContent)
+	contentHeight := m.height - 2 // header + status bar
+	sep := separatorStyle.Render("|")
 
-	viewerContent := m.viewer.view()
-	viewerRendered := viewerStyle.Render(viewerContent)
+	// Header row -- pad plain text first, then apply style.
+	sidebarHeader := padRight(" Sessions", sidebarWidth)
+	viewerHeader := " Transcript"
 
-	main := lipgloss.JoinHorizontal(lipgloss.Top, sidebarRendered, viewerRendered)
+	var b strings.Builder
+	if m.focus == focusSidebar {
+		b.WriteString(headerActiveStyle.Render(sidebarHeader))
+		b.WriteString(sep)
+		b.WriteString(headerInactiveStyle.Render(viewerHeader))
+	} else {
+		b.WriteString(headerInactiveStyle.Render(sidebarHeader))
+		b.WriteString(sep)
+		b.WriteString(headerActiveStyle.Render(viewerHeader))
+	}
+	b.WriteString("\n")
 
-	status := statusStyle.Render("Tab:switch  j/k:navigate  d:export  /:filter  q:quit")
-	if m.status != "" {
-		status = statusStyle.Render(m.status + "  |  Tab:switch  j/k:navigate  d:export  /:filter  q:quit")
+	sidebarLines := m.sidebar.viewLines(m.focus == focusSidebar)
+	viewerLines := strings.Split(m.viewer.view(), "\n")
+
+	for len(viewerLines) < contentHeight {
+		viewerLines = append(viewerLines, "")
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left, main, status)
+	for i := 0; i < contentHeight; i++ {
+		sl := ""
+		if i < len(sidebarLines) {
+			sl = sidebarLines[i]
+		}
+		vl := ""
+		if i < len(viewerLines) {
+			vl = viewerLines[i]
+		}
+		b.WriteString(sl)
+		b.WriteString(sep)
+		b.WriteString(" ")
+		b.WriteString(vl)
+		b.WriteString("\n")
+	}
+
+	status := "h/l:switch  j/k:navigate  d:export  /:filter  q:quit"
+	if m.status != "" {
+		status = m.status + "  |  " + status
+	}
+	b.WriteString(statusStyle.Render(status))
+
+	return b.String()
 }

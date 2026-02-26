@@ -87,7 +87,12 @@ func (v *viewerModel) renderTranscript() string {
 		b.WriteString(roundHeaderStyle.Render(header) + "\n\n")
 
 		if r.UserMessage != "" {
-			b.WriteString(userLabelStyle.Render("[YOU]") + " " + r.UserMessage + "\n\n")
+			if r.IsContext {
+				summary := contextSummary(r.UserMessage)
+				b.WriteString(dimStyle.Render("[CONTEXT] "+summary) + "\n\n")
+			} else {
+				b.WriteString(userLabelStyle.Render("[YOU]") + " " + r.UserMessage + "\n\n")
+			}
 		}
 
 		for _, tc := range r.ToolCalls {
@@ -122,4 +127,27 @@ func (v *viewerModel) renderTranscript() string {
 		totalUsage.CacheRead, totalUsage.CacheCreation))
 
 	return b.String()
+}
+
+// contextSummary returns a short description for system-injected context.
+func contextSummary(text string) string {
+	if strings.HasPrefix(text, "This session is being continued") {
+		return "(session continuation summary)"
+	}
+	if strings.HasPrefix(text, "Implement the following plan:") {
+		// Extract the plan title from the first heading.
+		for _, line := range strings.Split(text, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "# ") {
+				return "(plan: " + strings.TrimPrefix(line, "# ") + ")"
+			}
+		}
+		return "(plan implementation)"
+	}
+	// Fallback: first line truncated.
+	first := strings.SplitN(text, "\n", 2)[0]
+	if len(first) > 80 {
+		first = first[:77] + "..."
+	}
+	return "(" + first + ")"
 }

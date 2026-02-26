@@ -2,14 +2,9 @@ package tui
 
 import "github.com/charmbracelet/lipgloss"
 
-var (
-	// Sidebar styles.
-	sidebarStyle = lipgloss.NewStyle().
-			Width(40).
-			BorderRight(true).
-			BorderStyle(lipgloss.NormalBorder()).
-			Padding(0, 1)
+const sidebarWidth = 40
 
+var (
 	selectedStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("170"))
@@ -18,9 +13,6 @@ var (
 			Foreground(lipgloss.Color("241"))
 
 	// Viewer styles.
-	viewerStyle = lipgloss.NewStyle().
-			Padding(0, 1)
-
 	roundHeaderStyle = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(lipgloss.Color("39"))
@@ -40,8 +32,16 @@ var (
 			Foreground(lipgloss.Color("241")).
 			Italic(true)
 
-	// Status bar.
+	separatorStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("237"))
+
+	headerActiveStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("255"))
+
+	headerInactiveStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("241"))
+
 	statusStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("241")).
-			Padding(0, 1)
+			Foreground(lipgloss.Color("241"))
 )

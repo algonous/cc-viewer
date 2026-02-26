@@ -39,6 +39,9 @@ func TestLoadTranscript(t *testing.T) {
 
 	// Round 0: "hello there" + tool call + assistant texts.
 	r0 := tr.Rounds[0]
+	if r0.IsContext {
+		t.Error("round 0 should not be context")
+	}
 	if r0.UserMessage != "hello there" {
 		t.Errorf("round 0 user message = %q", r0.UserMessage)
 	}
@@ -75,6 +78,37 @@ func TestLoadTranscript(t *testing.T) {
 	}
 	if r1.Usage.OutputTokens != 60 {
 		t.Errorf("round 1 output tokens = %d, want 60", r1.Usage.OutputTokens)
+	}
+}
+
+func TestLoadTranscriptContext(t *testing.T) {
+	dir := t.TempDir()
+	content := `{"type":"user","timestamp":"2026-02-26T11:00:00Z","sessionId":"s1","message":{"role":"user","content":"Implement the following plan:\n\n# My Plan\n\nDo stuff"}}
+{"type":"assistant","timestamp":"2026-02-26T11:00:05Z","sessionId":"s1","message":{"role":"assistant","content":[{"type":"text","text":"OK"}],"usage":{"input_tokens":10,"output_tokens":5}}}
+{"type":"user","timestamp":"2026-02-26T11:01:00Z","sessionId":"s1","message":{"role":"user","content":"This session is being continued from a previous conversation that ran out of context."}}
+{"type":"assistant","timestamp":"2026-02-26T11:01:05Z","sessionId":"s1","message":{"role":"assistant","content":[{"type":"text","text":"Got it"}],"usage":{"input_tokens":10,"output_tokens":5}}}
+{"type":"user","timestamp":"2026-02-26T11:02:00Z","sessionId":"s1","message":{"role":"user","content":"now do the real thing"}}
+{"type":"assistant","timestamp":"2026-02-26T11:02:05Z","sessionId":"s1","message":{"role":"assistant","content":[{"type":"text","text":"Done"}],"usage":{"input_tokens":10,"output_tokens":5}}}
+`
+	path := filepath.Join(dir, "ctx.jsonl")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	tr, err := LoadTranscript(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tr.Rounds) != 3 {
+		t.Fatalf("expected 3 rounds, got %d", len(tr.Rounds))
+	}
+	if !tr.Rounds[0].IsContext {
+		t.Error("round 0 (plan impl) should be context")
+	}
+	if !tr.Rounds[1].IsContext {
+		t.Error("round 1 (continuation) should be context")
+	}
+	if tr.Rounds[2].IsContext {
+		t.Error("round 2 (real user msg) should not be context")
 	}
 }
 
