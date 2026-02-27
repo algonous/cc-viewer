@@ -88,36 +88,80 @@ func writeMarkdownRound(buf *strings.Builder, r Round, blockIndices []int) {
 	}
 	fmt.Fprintf(buf, "## Round %d (%s)\n\n", r.Index+1, ts)
 
+	// Collect the blocks to write (all or selected).
+	var selected []Block
 	if blockIndices == nil {
-		for _, b := range r.Blocks {
-			writeMarkdownBlock(buf, b)
-		}
+		selected = r.Blocks
 	} else {
 		for _, bi := range blockIndices {
 			if bi >= 0 && bi < len(r.Blocks) {
-				writeMarkdownBlock(buf, r.Blocks[bi])
+				selected = append(selected, r.Blocks[bi])
 			}
+		}
+	}
+
+	// Write blocks, merging consecutive tool blocks into one fenced block.
+	for i := 0; i < len(selected); i++ {
+		b := selected[i]
+		if b.Role == "tool" {
+			// Collect the entire run of consecutive tool blocks.
+			var lines []string
+			for i < len(selected) && selected[i].Role == "tool" {
+				if selected[i].ToolCall != nil {
+					if selected[i].ToolCall.InputSummary != "" {
+						lines = append(lines, selected[i].ToolCall.Name+": "+selected[i].ToolCall.InputSummary)
+					} else {
+						lines = append(lines, selected[i].ToolCall.Name)
+					}
+				}
+				i++
+			}
+			i-- // outer loop will increment
+			if len(lines) > 0 {
+				fmt.Fprintf(buf, "```tool_use\n%s\n```\n\n", strings.Join(lines, "\n"))
+			}
+		} else {
+			writeMarkdownBlock(buf, b)
 		}
 	}
 }
 
 func writeMarkdownBlock(buf *strings.Builder, b Block) {
+	var tag string
 	switch b.Role {
 	case "you", "context":
-		fmt.Fprintf(buf, "```prompt\n%s\n```\n\n", b.Text)
-	case "tool":
-		if b.ToolCall != nil {
-			if b.ToolCall.InputSummary != "" {
-				fmt.Fprintf(buf, "```tool_use\n%s: %s\n```\n\n", b.ToolCall.Name, b.ToolCall.InputSummary)
-			} else {
-				fmt.Fprintf(buf, "```tool_use\n%s\n```\n\n", b.ToolCall.Name)
-			}
-		}
+		tag = "prompt"
 	case "thinking":
-		fmt.Fprintf(buf, "```thinking\n%s\n```\n\n", b.Text)
+		tag = "thinking"
 	case "claude":
-		fmt.Fprintf(buf, "```assistant\n%s\n```\n\n", b.Text)
+		tag = "assistant"
+	default:
+		return
 	}
+	fence := makeFence(b.Text)
+	fmt.Fprintf(buf, "%s%s\n%s\n%s\n\n", fence, tag, b.Text, fence)
+}
+
+// makeFence returns a backtick fence that is longer than any backtick
+// sequence found in text, with a minimum of 3.
+func makeFence(text string) string {
+	max := 0
+	cur := 0
+	for i := 0; i < len(text); i++ {
+		if text[i] == '`' {
+			cur++
+			if cur > max {
+				max = cur
+			}
+		} else {
+			cur = 0
+		}
+	}
+	n := max + 1
+	if n < 3 {
+		n = 3
+	}
+	return strings.Repeat("`", n)
 }
 
 func makeExportBlock(sessionID string, roundIndex, blockIndex int, b Block) ExportBlock {

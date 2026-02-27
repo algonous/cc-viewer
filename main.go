@@ -39,6 +39,7 @@ func main() {
 	}
 
 	srv := server.New(*claudeDir, sessions, webFS)
+	srv.StartHistoryTail()
 
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {

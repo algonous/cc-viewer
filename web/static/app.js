@@ -15,197 +15,229 @@ var state = {
 // Blocks that start folded by default.
 var FOLD_CLOSED = {context: true, tool: true, thinking: true};
 
-// --- API ---
+// SSE connections.
+var sessionSource = null;
+var transcriptSource = null;
 
-function fetchJSON(url) {
-  return fetch(url).then(function(r) { return r.json(); });
+// --- SSE Session Stream ---
+
+var sessionStreamInitialized = false;
+
+function startSessionStream() {
+  if (sessionSource) sessionSource.close();
+  sessionSource = new EventSource('/api/sessions/stream');
+
+  sessionSource.addEventListener('sessions', function(e) {
+    var data = JSON.parse(e.data);
+    state.sessions = data || [];
+    applyFilter();
+
+    if (!sessionStreamInitialized) {
+      sessionStreamInitialized = true;
+      renderSidebar();
+      updateSessionCount();
+
+      // Auto-load first (or URL-targeted) transcript.
+      var targetIdx = 0;
+      if (state._initialSessionID) {
+        for (var i = 0; i < state.filteredSessions.length; i++) {
+          if (state.filteredSessions[i].session_id === state._initialSessionID) {
+            targetIdx = i;
+            break;
+          }
+        }
+        delete state._initialSessionID;
+      }
+      if (state.filteredSessions.length > 0) {
+        loadTranscript(targetIdx);
+      }
+    } else {
+      // Update: preserve current selection.
+      if (state.currentSession) {
+        var sid = state.currentSession.session_id;
+        state.sidebarIdx = -1;
+        for (var i = 0; i < state.filteredSessions.length; i++) {
+          if (state.filteredSessions[i].session_id === sid) {
+            state.sidebarIdx = i;
+            break;
+          }
+        }
+      }
+      renderSidebar();
+      updateSessionCount();
+    }
+  });
+
+  sessionSource.onerror = function() {
+    // EventSource auto-reconnects. Nothing to do.
+  };
 }
 
-var pollTimer = null;
+// --- SSE Transcript Stream ---
 
-function stopPolling() {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+function stopTranscriptStream() {
+  if (transcriptSource) {
+    transcriptSource.close();
+    transcriptSource = null;
+  }
 }
 
 function loadTranscript(idx) {
   if (idx < 0 || idx >= state.filteredSessions.length) return;
-  stopPolling();
+  stopTranscriptStream();
+
   state.sidebarIdx = idx;
   state.currentSession = state.filteredSessions[idx];
   state.selectedBlocks = {};
+  state.transcript = { session_id: state.currentSession.session_id, rounds: [] };
   renderSidebar();
 
   var sid = state.currentSession.session_id;
   if (state._initialRoundIdx === undefined) {
     history.replaceState(null, '', '/' + sid);
   }
-  fetchJSON('/api/transcript/' + sid).then(function(data) {
-    state.transcript = data;
-    renderViewer();
-    updateSelectionUI();
-    renderStatusBar();
-    startPolling(sid);
 
-    if (state._initialRoundIdx !== undefined) {
-      scrollToTarget(state._initialRoundIdx, state._initialBlockIdx);
-      delete state._initialRoundIdx;
-      delete state._initialBlockIdx;
+  // Show loading state.
+  var title = document.getElementById('viewer-title');
+  var content = document.getElementById('viewer-content');
+  var s = state.currentSession;
+  title.textContent = s ? s.project_name + ' -- loading...' : 'loading...';
+  content.innerHTML = '';
+  updateSelectionUI();
+
+  // Per-round cumulative usage (aggregated client-side for display updates).
+  var roundUsage = {};
+  var renderedRounds = 0;
+  var lastRenderedBlockCount = 0;
+  var renderFrame = null;
+
+  function scheduleRender() {
+    if (!renderFrame) {
+      renderFrame = requestAnimationFrame(flushRender);
     }
-  });
-}
-
-function startPolling(sid) {
-  stopPolling();
-  pollTimer = setInterval(function() {
-    if (!state.currentSession || state.currentSession.session_id !== sid) {
-      stopPolling();
-      return;
-    }
-    fetchJSON('/api/transcript/' + sid).then(function(data) {
-      if (!state.transcript || !data || !data.rounds) return;
-      var oldLen = state.transcript.rounds.length;
-      var newLen = data.rounds.length;
-      if (newLen < oldLen) return;
-
-      var content = document.getElementById('viewer-content');
-      var changed = false;
-
-      // Check if the last existing round was updated (in-progress round growing).
-      if (oldLen > 0 && newLen >= oldLen) {
-        var lastIdx = oldLen - 1;
-        var oldRound = state.transcript.rounds[lastIdx];
-        var newRound = data.rounds[lastIdx];
-        if (roundChanged(oldRound, newRound)) {
-          state.transcript.rounds[lastIdx] = newRound;
-          var oldEl = content.querySelector('.round[data-round-idx="' + lastIdx + '"]');
-          if (oldEl) {
-            var tmp = document.createElement('div');
-            tmp.innerHTML = renderRound(newRound, lastIdx);
-            var newEl = tmp.firstChild;
-            content.replaceChild(newEl, oldEl);
-            initBlocks(newEl);
-          }
-          changed = true;
-        }
-      }
-
-      // Append new rounds.
-      if (newLen > oldLen) {
-        var html = '';
-        for (var i = oldLen; i < newLen; i++) {
-          state.transcript.rounds.push(data.rounds[i]);
-          html += renderRound(data.rounds[i], i);
-        }
-        if (state.roundOrder === 'desc') {
-          content.insertAdjacentHTML('afterbegin', html);
-        } else {
-          content.insertAdjacentHTML('beforeend', html);
-        }
-        for (var j = oldLen; j < newLen; j++) {
-          var el = content.querySelector('.round[data-round-idx="' + j + '"]');
-          if (el) initBlocks(el);
-        }
-        changed = true;
-      }
-
-      if (!changed) return;
-
-      // Update title and status bar.
-      var s = state.currentSession;
-      var title = document.getElementById('viewer-title');
-      title.textContent = (s ? s.project_name + ' -- ' : '') + state.transcript.rounds.length + ' rounds';
-      renderStatusBar();
-    });
-  }, 2000);
-}
-
-// Compare two round objects to detect changes (new blocks, updated content).
-function roundChanged(oldR, newR) {
-  var ob = oldR.blocks || [];
-  var nb = newR.blocks || [];
-  if (ob.length !== nb.length) return true;
-  for (var i = 0; i < ob.length; i++) {
-    if (ob[i].html !== nb[i].html || ob[i].name !== nb[i].name ||
-        ob[i].input_summary !== nb[i].input_summary) return true;
   }
-  return false;
-}
 
-// Initialize fold summaries and toggle handlers for blocks within a container element.
-function initBlocks(container) {
-  // Block fold summaries + handlers.
-  var blocks = container.querySelectorAll('.chat-block');
-  for (var i = 0; i < blocks.length; i++) {
-    var block = blocks[i];
-    var summaryEl = block.querySelector('.fold-summary');
-    var body = block.querySelector('.fold-body');
-    if (summaryEl && body) {
-      var text;
-      if (block.classList.contains('chat-tool')) {
-        var nameEl = body.querySelector('.tool-name');
-        var inputEl = body.querySelector('.tool-input');
-        text = (nameEl ? nameEl.textContent : '');
-        if (inputEl && inputEl.textContent) text += ': ' + inputEl.textContent;
+  function flushRender() {
+    renderFrame = null;
+    var content = document.getElementById('viewer-content');
+    var rounds = state.transcript.rounds;
+
+    // Re-render the last previously-rendered round if it got new blocks.
+    if (renderedRounds > 0 && renderedRounds <= rounds.length) {
+      var lastRound = rounds[renderedRounds - 1];
+      var bc = lastRound.blocks.length;
+      if (bc !== lastRenderedBlockCount) {
+        var oldEl = content.querySelector('.round[data-round-idx="' + lastRound.index + '"]');
+        if (oldEl) {
+          var tmp = document.createElement('div');
+          tmp.innerHTML = renderRound(lastRound, lastRound.index);
+          var newEl = tmp.firstChild;
+          content.replaceChild(newEl, oldEl);
+          initBlocks(newEl);
+        }
+        lastRenderedBlockCount = bc;
+      }
+    }
+
+    // Append new rounds.
+    for (var i = renderedRounds; i < rounds.length; i++) {
+      var html = renderRound(rounds[i], rounds[i].index);
+      if (state.roundOrder === 'desc') {
+        content.insertAdjacentHTML('afterbegin', html);
       } else {
-        text = (body.textContent || '').trim().replace(/\s+/g, ' ');
-        text = truncate(text, 80);
+        content.insertAdjacentHTML('beforeend', html);
       }
-      summaryEl.textContent = text;
+      var el = content.querySelector('.round[data-round-idx="' + rounds[i].index + '"]');
+      if (el) initBlocks(el);
     }
-    var header = block.querySelector('.block-header');
-    if (header) header.addEventListener('click', foldToggleHandler);
-  }
-
-  // Group fold summaries + handlers.
-  var groups = container.querySelectorAll('.block-group');
-  for (var gi = 0; gi < groups.length; gi++) {
-    var group = groups[gi];
-    var gSummary = group.querySelector('.group-header .fold-summary');
-    if (gSummary) {
-      var gBody = group.querySelector('.group-body');
-      if (gBody) {
-        var gText = '';
-        if (group.classList.contains('block-group-tool')) {
-          var names = gBody.querySelectorAll('.tool-name');
-          var nameList = [];
-          for (var ni = 0; ni < names.length; ni++) {
-            var n = names[ni].textContent;
-            if (n && nameList.indexOf(n) < 0) nameList.push(n);
-          }
-          gText = nameList.join(', ');
-        } else {
-          var cnt = group.querySelector('.group-count');
-          gText = (cnt ? cnt.textContent.replace(/[()]/g, '') : '') + ' blocks';
-        }
-        gSummary.textContent = gText;
-      }
+    if (rounds.length > renderedRounds) {
+      lastRenderedBlockCount = rounds[rounds.length - 1].blocks.length;
     }
-    var gh = group.querySelector('.group-header');
-    if (gh) gh.addEventListener('click', groupFoldToggleHandler);
-  }
+    renderedRounds = rounds.length;
 
-  // Round fold summary + handler.
-  var rfSummary = container.querySelector('.round-fold-summary');
-  if (rfSummary) {
-    var rBody = container.querySelector('.round-body');
-    if (rBody) {
-      var firstBlock = rBody.querySelector('.chat-block');
-      var rText = '';
-      if (firstBlock) {
-        var fb = firstBlock.querySelector('.fold-body');
-        if (fb) {
-          rText = (fb.textContent || '').trim().replace(/\s+/g, ' ');
-          rText = truncate(rText, 80);
+    // Update header.
+    var s = state.currentSession;
+    var title = document.getElementById('viewer-title');
+    title.textContent = (s ? s.project_name + ' -- ' : '') + rounds.length + ' rounds';
+    updateSelectionUI();
+
+    // Handle initial scroll target.
+    if (state._initialRoundIdx !== undefined) {
+      var targetRound = null;
+      for (var j = 0; j < rounds.length; j++) {
+        if (rounds[j].index === state._initialRoundIdx) {
+          targetRound = rounds[j];
+          break;
         }
       }
-      var bc = rBody.querySelectorAll('.chat-block').length;
-      rText += ' (' + bc + ' block' + (bc !== 1 ? 's' : '') + ')';
-      rfSummary.textContent = rText;
+      if (targetRound) {
+        scrollToTarget(state._initialRoundIdx, state._initialBlockIdx);
+        delete state._initialRoundIdx;
+        delete state._initialBlockIdx;
+      }
     }
   }
-  var rh = container.querySelector('.round-header');
-  if (rh) rh.addEventListener('click', roundFoldToggleHandler);
+
+  transcriptSource = new EventSource('/api/transcript/' + sid + '/stream');
+
+  transcriptSource.addEventListener('block', function(e) {
+    var block = JSON.parse(e.data);
+    var ri = block.round_index;
+    var rounds = state.transcript.rounds;
+
+    // Find or create round.
+    var round;
+    if (rounds.length === 0 || rounds[rounds.length - 1].index !== ri) {
+      // New round.
+      round = {
+        index: ri,
+        user_timestamp: block.user_timestamp || '',
+        is_context: !!block.is_context,
+        blocks: [],
+        usage: { input_tokens: 0, output_tokens: 0, cache_read: 0, cache_creation: 0 },
+      };
+      rounds.push(round);
+    } else {
+      round = rounds[rounds.length - 1];
+    }
+
+    // Add block.
+    round.blocks.push({
+      role: block.role,
+      html: block.html || '',
+      name: block.name || '',
+      input_summary: block.input_summary || '',
+    });
+
+    scheduleRender();
+  });
+
+  transcriptSource.addEventListener('usage', function(e) {
+    var usage = JSON.parse(e.data);
+    var ri = usage.round_index;
+    var rounds = state.transcript.rounds;
+
+    for (var i = rounds.length - 1; i >= 0; i--) {
+      if (rounds[i].index === ri) {
+        rounds[i].usage = {
+          input_tokens: usage.input_tokens,
+          output_tokens: usage.output_tokens,
+          cache_read: usage.cache_read,
+          cache_creation: usage.cache_creation,
+        };
+        break;
+      }
+    }
+
+    scheduleRender();
+  });
+
+  transcriptSource.onerror = function() {
+    // EventSource auto-reconnects. Nothing to do.
+  };
 }
+
+// --- API (for export only) ---
 
 function doExport() {
   if (!state.currentSession) return;
@@ -302,7 +334,7 @@ function renderViewer() {
 
   var html = '';
   for (var j = 0; j < order.length; j++) {
-    html += renderRound(rounds[order[j]], order[j]);
+    html += renderRound(rounds[order[j]], rounds[order[j]].index);
   }
   content.innerHTML = html;
 
@@ -353,7 +385,7 @@ function renderRound(round, idx) {
   var html = '<div class="round" data-round-idx="' + idx + '">' +
     '<div class="round-header">' +
     '<span class="fold-arrow open">&#9654;</span>' +
-    '<span class="round-index">#' + (round.index + 1) + '</span>' +
+    '<span class="round-index">#' + (idx + 1) + '</span>' +
     '<span class="round-timestamp">' + escapeHtml(ts) + '</span>' +
     '<a class="anchor-link" data-anchor="/' + sid + '/' + idx + '" title="Copy link">#</a>' +
     '<span class="round-fold-summary"></span>' +
@@ -380,8 +412,24 @@ function renderRound(round, idx) {
       html += renderBlock(idx, bi, blocks[bi].role, buildBlockContent(blocks[bi]), sid);
     } else {
       var startOpen = !FOLD_CLOSED[group.role];
-      html += '<div class="block-group block-group-' + group.role + '">' +
+      // Tool groups get a single checkbox for the entire group.
+      var checkboxHtml = '';
+      var groupCheckedClass = '';
+      if (group.role === 'tool') {
+        var groupBlockIds = [];
+        var allGroupSelected = true;
+        for (var ci = 0; ci < group.indices.length; ci++) {
+          var gid = 'b-' + idx + '-' + group.indices[ci];
+          groupBlockIds.push(gid);
+          if (!state.selectedBlocks[gid]) allGroupSelected = false;
+        }
+        var groupChecked = (allGroupSelected && groupBlockIds.length > 0) ? ' checked' : '';
+        groupCheckedClass = (allGroupSelected && groupBlockIds.length > 0) ? ' block-checked' : '';
+        checkboxHtml = '<input type="checkbox" class="group-checkbox" data-group-blocks="' + groupBlockIds.join(',') + '"' + groupChecked + '>';
+      }
+      html += '<div class="block-group block-group-' + group.role + groupCheckedClass + '">' +
         '<div class="group-header">' +
+        checkboxHtml +
         '<span class="fold-arrow' + (startOpen ? ' open' : '') + '">&#9654;</span>' +
         '<span class="chat-role">' + group.role.toUpperCase() + '</span>' +
         '<span class="group-count">(' + group.indices.length + ')</span>' +
@@ -390,7 +438,11 @@ function renderRound(round, idx) {
         '<div class="group-body' + (startOpen ? ' open' : '') + '">';
       for (var k = 0; k < group.indices.length; k++) {
         var bi2 = group.indices[k];
-        html += renderBlock(idx, bi2, blocks[bi2].role, buildBlockContent(blocks[bi2]), sid);
+        if (group.role === 'tool') {
+          html += renderCompactToolBlock(idx, bi2, blocks[bi2], sid);
+        } else {
+          html += renderBlock(idx, bi2, blocks[bi2].role, buildBlockContent(blocks[bi2]), sid);
+        }
       }
       html += '</div></div>';
     }
@@ -424,6 +476,19 @@ function renderBlock(roundIdx, blockIdx, role, contentHtml, sid) {
 
   html += '</div>';
   return html;
+}
+
+// Render a compact tool block for use inside a tool group (no fold mechanism).
+function renderCompactToolBlock(roundIdx, blockIdx, block, sid) {
+  var blockId = 'b-' + roundIdx + '-' + blockIdx;
+
+  return '<div class="chat-block chat-tool compact-tool" data-block-id="' + blockId + '">' +
+    '<div class="block-header">' +
+    '<span class="tool-name">' + escapeHtml(block.name || '') + '</span>' +
+    '<span class="tool-input">' + escapeHtml(block.input_summary || '') + '</span>' +
+    '<a class="anchor-link" data-anchor="/' + sid + '/' + roundIdx + '/' + blockIdx + '" title="Copy link">#</a>' +
+    '</div>' +
+    '</div>';
 }
 
 // After innerHTML is set, fill in fold summaries from rendered content.
@@ -500,6 +565,82 @@ function fillFoldSummaries() {
   }
 }
 
+// Initialize fold summaries and toggle handlers for blocks within a container element.
+function initBlocks(container) {
+  // Block fold summaries + handlers.
+  var blocks = container.querySelectorAll('.chat-block');
+  for (var i = 0; i < blocks.length; i++) {
+    var block = blocks[i];
+    var summaryEl = block.querySelector('.fold-summary');
+    var body = block.querySelector('.fold-body');
+    if (summaryEl && body) {
+      var text;
+      if (block.classList.contains('chat-tool')) {
+        var nameEl = body.querySelector('.tool-name');
+        var inputEl = body.querySelector('.tool-input');
+        text = (nameEl ? nameEl.textContent : '');
+        if (inputEl && inputEl.textContent) text += ': ' + inputEl.textContent;
+      } else {
+        text = (body.textContent || '').trim().replace(/\s+/g, ' ');
+        text = truncate(text, 80);
+      }
+      summaryEl.textContent = text;
+    }
+    var header = block.querySelector('.block-header');
+    if (header) header.addEventListener('click', foldToggleHandler);
+  }
+
+  // Group fold summaries + handlers.
+  var groups = container.querySelectorAll('.block-group');
+  for (var gi = 0; gi < groups.length; gi++) {
+    var group = groups[gi];
+    var gSummary = group.querySelector('.group-header .fold-summary');
+    if (gSummary) {
+      var gBody = group.querySelector('.group-body');
+      if (gBody) {
+        var gText = '';
+        if (group.classList.contains('block-group-tool')) {
+          var names = gBody.querySelectorAll('.tool-name');
+          var nameList = [];
+          for (var ni = 0; ni < names.length; ni++) {
+            var n = names[ni].textContent;
+            if (n && nameList.indexOf(n) < 0) nameList.push(n);
+          }
+          gText = nameList.join(', ');
+        } else {
+          var cnt = group.querySelector('.group-count');
+          gText = (cnt ? cnt.textContent.replace(/[()]/g, '') : '') + ' blocks';
+        }
+        gSummary.textContent = gText;
+      }
+    }
+    var gh = group.querySelector('.group-header');
+    if (gh) gh.addEventListener('click', groupFoldToggleHandler);
+  }
+
+  // Round fold summary + handler.
+  var rfSummary = container.querySelector('.round-fold-summary');
+  if (rfSummary) {
+    var rBody = container.querySelector('.round-body');
+    if (rBody) {
+      var firstBlock = rBody.querySelector('.chat-block');
+      var rText = '';
+      if (firstBlock) {
+        var fb = firstBlock.querySelector('.fold-body');
+        if (fb) {
+          rText = (fb.textContent || '').trim().replace(/\s+/g, ' ');
+          rText = truncate(rText, 80);
+        }
+      }
+      var bc = rBody.querySelectorAll('.chat-block').length;
+      rText += ' (' + bc + ' block' + (bc !== 1 ? 's' : '') + ')';
+      rfSummary.textContent = rText;
+    }
+  }
+  var rh = container.querySelector('.round-header');
+  if (rh) rh.addEventListener('click', roundFoldToggleHandler);
+}
+
 function foldToggleHandler(e) {
   // Don't toggle fold when clicking the checkbox or anchor link.
   if (e.target.classList.contains('block-checkbox')) return;
@@ -523,6 +664,7 @@ function roundFoldToggleHandler(e) {
 }
 
 function groupFoldToggleHandler(e) {
+  if (e.target.classList.contains('group-checkbox')) return;
   if (e.target.closest('.anchor-link')) return;
   var group = this.closest('.block-group');
   if (!group) return;
@@ -540,21 +682,16 @@ function updateSelectionUI() {
   } else {
     actions.classList.add('hidden');
   }
-  renderStatusBar();
 }
 
-function renderStatusBar() {
-  var bar = document.getElementById('status-bar');
-  var count = selectedBlockCount();
-  var parts = [];
-  parts.push(state.filteredSessions.length + ' sessions');
-  if (state.transcript) {
-    parts.push(state.transcript.rounds.length + ' rounds');
+function updateSessionCount() {
+  var countEl = document.getElementById('session-count');
+  var input = document.getElementById('filter-input');
+  if (input.value) {
+    countEl.textContent = '';
+  } else {
+    countEl.textContent = state.sessions.length + ' sessions';
   }
-  if (count > 0) {
-    parts.push(count + ' block' + (count !== 1 ? 's' : '') + ' selected');
-  }
-  bar.textContent = parts.join('  |  ');
 }
 
 function selectedBlockCount() {
@@ -592,10 +729,20 @@ function dumpSelected() {
   for (var i = 0; i < blocks.length; i++) {
     var bid = blocks[i].getAttribute('data-block-id');
     if (state.selectedBlocks[bid]) {
-      var roleEl = blocks[i].querySelector('.chat-role');
-      var role = roleEl ? roleEl.textContent.trim() : '';
-      var body = blocks[i].querySelector('.fold-body');
-      var text = body ? body.textContent.trim() : '';
+      var role = '';
+      var text = '';
+      if (blocks[i].classList.contains('compact-tool')) {
+        role = 'TOOL';
+        var tn = blocks[i].querySelector('.tool-name');
+        var ti = blocks[i].querySelector('.tool-input');
+        text = (tn ? tn.textContent : '');
+        if (ti && ti.textContent) text += ': ' + ti.textContent;
+      } else {
+        var roleEl = blocks[i].querySelector('.chat-role');
+        role = roleEl ? roleEl.textContent.trim() : '';
+        var body = blocks[i].querySelector('.fold-body');
+        text = body ? body.textContent.trim() : '';
+      }
       if (role) {
         parts.push('[' + role + ']\n' + text);
       } else {
@@ -618,6 +765,12 @@ function clearAllSelections() {
     checkboxes[i].checked = false;
     var block = checkboxes[i].closest('.chat-block');
     if (block) block.classList.remove('block-checked');
+  }
+  var groupCheckboxes = document.querySelectorAll('#viewer-content .group-checkbox');
+  for (var j = 0; j < groupCheckboxes.length; j++) {
+    groupCheckboxes[j].checked = false;
+    var grp = groupCheckboxes[j].closest('.block-group');
+    if (grp) grp.classList.remove('block-checked');
   }
   updateSelectionUI();
 }
@@ -646,10 +799,11 @@ function updateFormatButtons() {
 
 var statusTimeout = null;
 function setStatus(msg) {
-  var bar = document.getElementById('status-bar');
-  bar.textContent = msg;
+  var title = document.getElementById('viewer-title');
+  var original = title.textContent;
+  title.textContent = msg;
   clearTimeout(statusTimeout);
-  statusTimeout = setTimeout(function() { renderStatusBar(); }, 3000);
+  statusTimeout = setTimeout(function() { title.textContent = original; }, 3000);
 }
 
 // --- Event handlers ---
@@ -659,19 +813,20 @@ document.getElementById('filter-input').addEventListener('input', function() {
   state.filterText = this.value;
   applyFilter();
   renderSidebar();
+  updateSessionCount();
 
   // If filter changed, reset viewer state.
   if (state.filteredSessions.length > 0) {
     loadTranscript(0);
   } else {
-    stopPolling();
+    stopTranscriptStream();
     state.currentSession = null;
     state.transcript = null;
     state.selectedBlocks = {};
     state.sidebarIdx = -1;
     renderViewer();
     updateSelectionUI();
-    renderStatusBar();
+    updateSessionCount();
   }
 });
 
@@ -691,6 +846,16 @@ document.getElementById('viewer-content').addEventListener('change', function(e)
     state.selectedBlocks[blockId] = e.target.checked;
     var block = e.target.closest('.chat-block');
     if (block) block.classList.toggle('block-checked', e.target.checked);
+    updateSelectionUI();
+  }
+  if (e.target.classList.contains('group-checkbox')) {
+    var ids = e.target.getAttribute('data-group-blocks').split(',');
+    var checked = e.target.checked;
+    for (var gi = 0; gi < ids.length; gi++) {
+      state.selectedBlocks[ids[gi]] = checked;
+    }
+    var group = e.target.closest('.block-group');
+    if (group) group.classList.toggle('block-checked', checked);
     updateSelectionUI();
   }
 });
@@ -843,54 +1008,5 @@ function scrollToTarget(roundIdx, blockIdx) {
   target.scrollIntoView({block: 'start'});
 }
 
-function loadSessions() {
-  fetchJSON('/api/sessions').then(function(data) {
-    state.sessions = data || [];
-    applyFilter();
-    renderSidebar();
-    renderStatusBar();
-
-    var targetIdx = 0;
-    if (state._initialSessionID) {
-      for (var i = 0; i < state.filteredSessions.length; i++) {
-        if (state.filteredSessions[i].session_id === state._initialSessionID) {
-          targetIdx = i;
-          break;
-        }
-      }
-      delete state._initialSessionID;
-    }
-    if (state.filteredSessions.length > 0) {
-      loadTranscript(targetIdx);
-    }
-
-    // Start polling for new sessions.
-    setInterval(refreshSessionList, 5000);
-  });
-}
-
-function refreshSessionList() {
-  fetchJSON('/api/sessions').then(function(data) {
-    if (!data) return;
-    state.sessions = data;
-    applyFilter();
-
-    // Re-find current session index after potential re-sort.
-    if (state.currentSession) {
-      var sid = state.currentSession.session_id;
-      state.sidebarIdx = -1;
-      for (var i = 0; i < state.filteredSessions.length; i++) {
-        if (state.filteredSessions[i].session_id === sid) {
-          state.sidebarIdx = i;
-          break;
-        }
-      }
-    }
-
-    renderSidebar();
-    renderStatusBar();
-  });
-}
-
 initFromURL();
-loadSessions();
+startSessionStream();

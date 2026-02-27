@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -16,48 +17,102 @@ import (
 
 // Server handles HTTP requests for the cc-viewer web UI.
 type Server struct {
-	claudeDir   string
-	sessions    []data.SessionSummary
-	webFS       fs.FS
-	mu          sync.Mutex
-	lastRefresh time.Time
+	claudeDir string
+	webFS     fs.FS
+
+	mu       sync.RWMutex
+	sessions []data.SessionSummary
+
+	// Broadcast: closed and replaced on each session update.
+	broadcastMu sync.Mutex
+	broadcast   chan struct{}
+
+	historyStop chan struct{}
 }
 
 // New creates a new Server.
 func New(claudeDir string, sessions []data.SessionSummary, webFS fs.FS) *Server {
-	return &Server{claudeDir: claudeDir, sessions: sessions, webFS: webFS}
+	return &Server{
+		claudeDir: claudeDir,
+		sessions:  sessions,
+		webFS:     webFS,
+		broadcast: make(chan struct{}),
+	}
 }
 
-// refreshSessions re-reads history.jsonl and merges new or updated sessions.
-func (s *Server) refreshSessions() {
-	fresh, err := data.LoadHistoryQuick(s.claudeDir)
-	if err != nil {
+// StartHistoryTail begins tailing history.jsonl for new session events.
+// Existing content was already loaded at startup; this tails from the end.
+func (s *Server) StartHistoryTail() {
+	s.historyStop = make(chan struct{})
+	historyPath := filepath.Join(s.claudeDir, "history.jsonl")
+
+	// Skip existing content (already loaded by LoadSessions at startup).
+	offset, _ := data.FileSize(historyPath)
+
+	lines := data.TailFile(historyPath, offset, s.historyStop)
+	go func() {
+		for line := range lines {
+			s.processHistoryLine(line)
+		}
+	}()
+}
+
+// StopHistoryTail stops the history tailing goroutine.
+func (s *Server) StopHistoryTail() {
+	if s.historyStop != nil {
+		close(s.historyStop)
+	}
+}
+
+// processHistoryLine handles a single new line from history.jsonl.
+func (s *Server) processHistoryLine(line []byte) {
+	update := data.ParseHistoryLine(line)
+	if update == nil {
 		return
 	}
 
-	existing := make(map[string]int, len(s.sessions))
-	for i, sess := range s.sessions {
-		existing[sess.SessionID] = i
-	}
-
-	changed := false
-	for _, sess := range fresh {
-		if idx, ok := existing[sess.SessionID]; ok {
-			if sess.LastTS > s.sessions[idx].LastTS {
-				s.sessions[idx].LastTS = sess.LastTS
-				changed = true
+	s.mu.Lock()
+	found := false
+	for i := range s.sessions {
+		if s.sessions[i].SessionID == update.SessionID {
+			if update.Timestamp > s.sessions[i].LastTS {
+				s.sessions[i].LastTS = update.Timestamp
 			}
-		} else {
-			s.sessions = append(s.sessions, sess)
-			changed = true
+			s.sessions[i].MessageCount++
+			found = true
+			break
 		}
 	}
-
-	if changed {
-		sort.Slice(s.sessions, func(i, j int) bool {
-			return s.sessions[i].LastTS > s.sessions[j].LastTS
+	if !found {
+		s.sessions = append(s.sessions, data.SessionSummary{
+			SessionID:    update.SessionID,
+			Project:      update.Project,
+			ProjectName:  update.ProjectName,
+			FirstMessage: update.Display,
+			FirstTS:      update.Timestamp,
+			LastTS:       update.Timestamp,
+			MessageCount: 1,
 		})
 	}
+	sort.Slice(s.sessions, func(i, j int) bool {
+		return s.sessions[i].LastTS > s.sessions[j].LastTS
+	})
+	s.mu.Unlock()
+
+	// Wake all session stream subscribers.
+	s.broadcastMu.Lock()
+	ch := s.broadcast
+	s.broadcast = make(chan struct{})
+	s.broadcastMu.Unlock()
+	close(ch)
+}
+
+// waitSessionUpdate returns a channel that closes on the next session update.
+func (s *Server) waitSessionUpdate() <-chan struct{} {
+	s.broadcastMu.Lock()
+	ch := s.broadcast
+	s.broadcastMu.Unlock()
+	return ch
 }
 
 // Handler returns the HTTP handler with all routes registered.
@@ -75,10 +130,14 @@ func (s *Server) Handler() http.Handler {
 		w.Write(indexHTML)
 	})
 
-	// API endpoints.
+	// REST API endpoints.
 	mux.HandleFunc("GET /api/sessions", s.handleSessions)
 	mux.HandleFunc("GET /api/transcript/{id}", s.handleTranscript)
 	mux.HandleFunc("POST /api/export", s.handleExport)
+
+	// SSE streaming endpoints.
+	mux.HandleFunc("GET /api/sessions/stream", s.handleSessionStream)
+	mux.HandleFunc("GET /api/transcript/{id}/stream", s.handleTranscriptStream)
 
 	return mux
 }
@@ -129,28 +188,33 @@ type exportRequest struct {
 	Blocks    [][]int `json:"blocks,omitempty"`
 }
 
-// --- Handlers ---
+// SSE event types.
+
+type sseBlockEvent struct {
+	RoundIndex    int    `json:"round_index"`
+	NewRound      bool   `json:"new_round,omitempty"`
+	IsContext     bool   `json:"is_context,omitempty"`
+	UserTimestamp string `json:"user_timestamp,omitempty"`
+	Role          string `json:"role"`
+	HTML          string `json:"html,omitempty"`
+	Name          string `json:"name,omitempty"`
+	InputSummary  string `json:"input_summary,omitempty"`
+}
+
+type sseUsageEvent struct {
+	RoundIndex    int   `json:"round_index"`
+	InputTokens   int64 `json:"input_tokens"`
+	OutputTokens  int64 `json:"output_tokens"`
+	CacheRead     int64 `json:"cache_read"`
+	CacheCreation int64 `json:"cache_creation"`
+}
+
+// --- REST Handlers ---
 
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
-	s.mu.Lock()
-	if time.Since(s.lastRefresh) > 5*time.Second {
-		s.refreshSessions()
-		s.lastRefresh = time.Now()
-	}
-	result := make([]sessionJSON, len(s.sessions))
-	for i, sess := range s.sessions {
-		result[i] = sessionJSON{
-			SessionID:    sess.SessionID,
-			Project:      sess.Project,
-			ProjectName:  sess.ProjectName,
-			FirstMessage: sess.FirstMessage,
-			AllMessages:  sess.AllMessages,
-			FirstTS:      sess.FirstTS,
-			LastTS:       sess.LastTS,
-			MessageCount: sess.MessageCount,
-		}
-	}
-	s.mu.Unlock()
+	s.mu.RLock()
+	result := s.buildSessionList()
+	s.mu.RUnlock()
 	writeJSON(w, result)
 }
 
@@ -212,7 +276,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Find session.
-	s.mu.Lock()
+	s.mu.RLock()
 	var session data.SessionSummary
 	found := false
 	for _, sess := range s.sessions {
@@ -222,7 +286,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	s.mu.Unlock()
+	s.mu.RUnlock()
 	if !found {
 		http.Error(w, "session not found", http.StatusNotFound)
 		return
@@ -268,6 +332,173 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
 	w.Write(content)
+}
+
+// --- SSE Handlers ---
+
+func (s *Server) handleSessionStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	ctx := r.Context()
+
+	// Send initial session list.
+	s.sendSessionList(w, flusher)
+
+	keepalive := time.NewTicker(30 * time.Second)
+	defer keepalive.Stop()
+
+	for {
+		updateCh := s.waitSessionUpdate()
+		select {
+		case <-ctx.Done():
+			return
+		case <-keepalive.C:
+			fmt.Fprintf(w, ": keepalive\n\n")
+			flusher.Flush()
+		case <-updateCh:
+			s.sendSessionList(w, flusher)
+		}
+	}
+}
+
+func (s *Server) sendSessionList(w http.ResponseWriter, flusher http.Flusher) {
+	s.mu.RLock()
+	result := s.buildSessionList()
+	s.mu.RUnlock()
+
+	jsonData, _ := json.Marshal(result)
+	fmt.Fprintf(w, "event: sessions\ndata: %s\n\n", jsonData)
+	flusher.Flush()
+}
+
+func (s *Server) buildSessionList() []sessionJSON {
+	result := make([]sessionJSON, len(s.sessions))
+	for i, sess := range s.sessions {
+		result[i] = sessionJSON{
+			SessionID:    sess.SessionID,
+			Project:      sess.Project,
+			ProjectName:  sess.ProjectName,
+			FirstMessage: sess.FirstMessage,
+			AllMessages:  sess.AllMessages,
+			FirstTS:      sess.FirstTS,
+			LastTS:       sess.LastTS,
+			MessageCount: sess.MessageCount,
+		}
+	}
+	return result
+}
+
+func (s *Server) handleTranscriptStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	id := r.PathValue("id")
+	path, err := data.FindTranscriptPath(s.claudeDir, id)
+	if err != nil {
+		http.Error(w, "transcript not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	ctx := r.Context()
+	stopCh := make(chan struct{})
+	go func() {
+		<-ctx.Done()
+		close(stopCh)
+	}()
+
+	// Tail from beginning -- backlog + live.
+	lines := data.TailFile(path, 0, stopCh)
+	streamer := data.NewTranscriptStreamer()
+
+	// Per-round cumulative usage for aggregation.
+	roundUsage := make(map[int]*sseUsageEvent)
+
+	keepalive := time.NewTicker(30 * time.Second)
+	defer keepalive.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-keepalive.C:
+			fmt.Fprintf(w, ": keepalive\n\n")
+			flusher.Flush()
+		case line, ok := <-lines:
+			if !ok {
+				return
+			}
+			ev := streamer.ProcessLine(line)
+			if ev == nil {
+				continue
+			}
+			s.sendStreamEvent(w, flusher, ev, roundUsage)
+		}
+	}
+}
+
+func (s *Server) sendStreamEvent(w http.ResponseWriter, flusher http.Flusher, ev *data.StreamEvent, roundUsage map[int]*sseUsageEvent) {
+	// Send each block as a separate SSE event.
+	for i, block := range ev.Blocks {
+		sse := sseBlockEvent{
+			RoundIndex: ev.RoundIndex,
+			Role:       block.Role,
+		}
+		// Only the first block in a new round carries round metadata.
+		if ev.NewRound && i == 0 {
+			sse.NewRound = true
+			sse.IsContext = ev.IsContext
+			sse.UserTimestamp = ev.UserTimestamp
+		}
+		if block.Role == "tool" && block.ToolCall != nil {
+			sse.Name = block.ToolCall.Name
+			sse.InputSummary = block.ToolCall.InputSummary
+		} else {
+			sse.HTML = renderMarkdown(block.Text)
+		}
+
+		jsonData, _ := json.Marshal(sse)
+		fmt.Fprintf(w, "event: block\ndata: %s\n\n", jsonData)
+	}
+
+	// Aggregate and send cumulative usage.
+	if ev.Usage != nil {
+		u, ok := roundUsage[ev.RoundIndex]
+		if !ok {
+			u = &sseUsageEvent{RoundIndex: ev.RoundIndex}
+			roundUsage[ev.RoundIndex] = u
+		}
+		// output_tokens: summed; input/cache: max.
+		u.OutputTokens += ev.Usage.OutputTokens
+		if ev.Usage.InputTokens > u.InputTokens {
+			u.InputTokens = ev.Usage.InputTokens
+		}
+		if ev.Usage.CacheCreation > u.CacheCreation {
+			u.CacheCreation = ev.Usage.CacheCreation
+		}
+		if ev.Usage.CacheRead > u.CacheRead {
+			u.CacheRead = ev.Usage.CacheRead
+		}
+
+		jsonData, _ := json.Marshal(u)
+		fmt.Fprintf(w, "event: usage\ndata: %s\n\n", jsonData)
+	}
+
+	flusher.Flush()
 }
 
 // --- Rendering ---

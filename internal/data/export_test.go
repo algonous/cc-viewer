@@ -215,6 +215,58 @@ func TestGenerateMarkdownOmitsEmptyRounds(t *testing.T) {
 	}
 }
 
+func TestGenerateMarkdownMergesConsecutiveTools(t *testing.T) {
+	session := SessionSummary{SessionID: "s1", Project: "/foo"}
+	transcript := &Transcript{
+		SessionID: "s1",
+		Rounds: []Round{{
+			Index:        0,
+			UserTimestamp: "2026-02-26T11:00:00Z",
+			Blocks: []Block{
+				{Role: "you", Text: "do stuff"},
+				{Role: "tool", ToolCall: &ToolCall{Name: "Read", InputSummary: "/a.go"}},
+				{Role: "tool", ToolCall: &ToolCall{Name: "Edit", InputSummary: "/a.go"}},
+				{Role: "tool", ToolCall: &ToolCall{Name: "Bash", InputSummary: "go test"}},
+				{Role: "claude", Text: "Done"},
+			},
+		}},
+	}
+	content := string(GenerateMarkdown(session, transcript, nil))
+
+	// All three tool blocks should be in one fenced block.
+	want := "```tool_use\nRead: /a.go\nEdit: /a.go\nBash: go test\n```"
+	if !strings.Contains(content, want) {
+		t.Errorf("expected merged tool block, got:\n%s", content)
+	}
+
+	// Should NOT have separate tool_use blocks.
+	count := strings.Count(content, "```tool_use")
+	if count != 1 {
+		t.Errorf("expected 1 tool_use fence, got %d", count)
+	}
+}
+
+func TestGenerateMarkdownEscapesBackticks(t *testing.T) {
+	session := SessionSummary{SessionID: "s1", Project: "/foo"}
+	transcript := &Transcript{
+		SessionID: "s1",
+		Rounds: []Round{{
+			Index:        0,
+			UserTimestamp: "2026-02-26T11:00:00Z",
+			Blocks: []Block{
+				{Role: "claude", Text: "Here is code:\n```go\nfmt.Println(\"hi\")\n```\nDone."},
+			},
+		}},
+	}
+	content := string(GenerateMarkdown(session, transcript, nil))
+
+	// The outer fence must use 4 backticks since content has triple backticks.
+	want := "````assistant\nHere is code:\n```go\nfmt.Println(\"hi\")\n```\nDone.\n````"
+	if !strings.Contains(content, want) {
+		t.Errorf("expected escaped fence, got:\n%s", content)
+	}
+}
+
 func TestConfigDir(t *testing.T) {
 	// With XDG set.
 	t.Setenv("XDG_CONFIG_HOME", "/tmp/xdg")
