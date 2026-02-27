@@ -28,6 +28,7 @@ func LoadSessions(claudeDir string) ([]SessionSummary, error) {
 	defer f.Close()
 
 	groups := make(map[string]*SessionSummary)
+	messages := make(map[string][]string)
 	var order []string
 
 	scanner := bufio.NewScanner(f)
@@ -55,6 +56,9 @@ func LoadSessions(claudeDir string) ([]SessionSummary, error) {
 			order = append(order, e.SessionID)
 		}
 		s.MessageCount++
+		if e.Display != "" && e.Display != "exit" {
+			messages[e.SessionID] = append(messages[e.SessionID], e.Display)
+		}
 		if e.Timestamp < s.FirstTS {
 			s.FirstTS = e.Timestamp
 			s.FirstMessage = e.Display
@@ -69,7 +73,9 @@ func LoadSessions(claudeDir string) ([]SessionSummary, error) {
 
 	result := make([]SessionSummary, 0, len(groups))
 	for _, id := range order {
-		result = append(result, *groups[id])
+		s := groups[id]
+		s.AllMessages = strings.Join(messages[id], "\n")
+		result = append(result, *s)
 	}
 
 	// Sort by most recent first.

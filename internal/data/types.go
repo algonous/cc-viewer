@@ -6,8 +6,9 @@ type SessionSummary struct {
 	Project      string
 	ProjectName  string
 	FirstMessage string
-	FirstTS      int64 // unix ms
-	LastTS       int64 // unix ms
+	AllMessages  string // all user messages concatenated, for search
+	FirstTS      int64  // unix ms
+	LastTS       int64  // unix ms
 	MessageCount int
 }
 

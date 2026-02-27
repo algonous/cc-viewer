@@ -53,6 +53,7 @@ type sessionJSON struct {
 	Project      string `json:"project"`
 	ProjectName  string `json:"project_name"`
 	FirstMessage string `json:"first_message"`
+	AllMessages  string `json:"all_messages"`
 	FirstTS      int64  `json:"first_ts"`
 	LastTS       int64  `json:"last_ts"`
 	MessageCount int    `json:"message_count"`
@@ -104,6 +105,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			Project:      sess.Project,
 			ProjectName:  sess.ProjectName,
 			FirstMessage: sess.FirstMessage,
+			AllMessages:  sess.AllMessages,
 			FirstTS:      sess.FirstTS,
 			LastTS:       sess.LastTS,
 			MessageCount: sess.MessageCount,

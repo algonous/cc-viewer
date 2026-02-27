@@ -76,8 +76,8 @@ function applyFilter() {
   } else {
     state.filteredSessions = state.sessions.filter(function(s) {
       return (s.project_name && s.project_name.toLowerCase().indexOf(text) >= 0) ||
-        (s.first_message && s.first_message.toLowerCase().indexOf(text) >= 0) ||
-        (s.project && s.project.toLowerCase().indexOf(text) >= 0);
+        (s.project && s.project.toLowerCase().indexOf(text) >= 0) ||
+        (s.all_messages && s.all_messages.toLowerCase().indexOf(text) >= 0);
     });
   }
 }
