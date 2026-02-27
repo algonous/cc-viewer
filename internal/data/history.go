@@ -7,29 +7,37 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // historyEntry is the raw JSON structure of one line in history.jsonl.
 type historyEntry struct {
-	SessionID string `json:"sessionId"`
-	Timestamp int64  `json:"timestamp"`
-	Project   string `json:"project"`
-	Display   string `json:"display"`
+	SessionID      string                    `json:"sessionId"`
+	Timestamp      int64                     `json:"timestamp"`
+	Project        string                    `json:"project"`
+	Display        string                    `json:"display"`
+	PastedContents map[string]pastedContent  `json:"pastedContents,omitempty"`
 }
 
-// LoadSessions reads the history.jsonl file and returns sessions grouped by ID,
-// sorted by most recent first.
+// pastedContent is the structure of a pasted text block in history.jsonl.
+type pastedContent struct {
+	Content string `json:"content"`
+}
+
+// LoadSessions reads the history.jsonl file and discovers orphaned transcript
+// files (sessions that fell off the history.jsonl 2000-line cap).
+// Returns all sessions sorted by most recent first.
 func LoadSessions(claudeDir string) ([]SessionSummary, error) {
+	groups := make(map[string]*SessionSummary)
+	messages := make(map[string][]string)
+	var order []string
+
+	// Phase 1: Parse history.jsonl for indexed sessions.
 	path := filepath.Join(claudeDir, "history.jsonl")
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-
-	groups := make(map[string]*SessionSummary)
-	messages := make(map[string][]string)
-	var order []string
 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
@@ -59,6 +67,11 @@ func LoadSessions(claudeDir string) ([]SessionSummary, error) {
 		if e.Display != "" && e.Display != "exit" {
 			messages[e.SessionID] = append(messages[e.SessionID], e.Display)
 		}
+		for _, pc := range e.PastedContents {
+			if pc.Content != "" {
+				messages[e.SessionID] = append(messages[e.SessionID], pc.Content)
+			}
+		}
 		if e.Timestamp < s.FirstTS {
 			s.FirstTS = e.Timestamp
 			s.FirstMessage = e.Display
@@ -67,9 +80,13 @@ func LoadSessions(claudeDir string) ([]SessionSummary, error) {
 			s.LastTS = e.Timestamp
 		}
 	}
+	f.Close()
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
+
+	// Phase 2: Scan transcript files for orphaned sessions not in history.jsonl.
+	discoverOrphanSessions(claudeDir, groups, messages, &order)
 
 	result := make([]SessionSummary, 0, len(groups))
 	for _, id := range order {
@@ -84,6 +101,132 @@ func LoadSessions(claudeDir string) ([]SessionSummary, error) {
 	})
 
 	return result, nil
+}
+
+// discoverOrphanSessions finds transcript JSONL files that have no entry in
+// history.jsonl (due to the 2000-line cap) and adds them to the session index.
+// It reads the first user message from each orphan transcript for search.
+func discoverOrphanSessions(claudeDir string, groups map[string]*SessionSummary, messages map[string][]string, order *[]string) {
+	projectsDir := filepath.Join(claudeDir, "projects")
+	projEntries, err := os.ReadDir(projectsDir)
+	if err != nil {
+		return
+	}
+
+	for _, projEntry := range projEntries {
+		if !projEntry.IsDir() {
+			continue
+		}
+		projPath := filepath.Join(projectsDir, projEntry.Name())
+		files, err := os.ReadDir(projPath)
+		if err != nil {
+			continue
+		}
+		for _, file := range files {
+			name := file.Name()
+			if file.IsDir() || !strings.HasSuffix(name, ".jsonl") {
+				continue
+			}
+			// Skip subagent files (agent-* prefix).
+			if strings.HasPrefix(name, "agent-") {
+				continue
+			}
+			sid := strings.TrimSuffix(name, ".jsonl")
+			if _, ok := groups[sid]; ok {
+				continue // already in history.jsonl
+			}
+
+			// Orphan session -- extract metadata from transcript.
+			s := orphanSessionFromTranscript(filepath.Join(projPath, name), sid, projEntry.Name())
+			if s == nil {
+				continue
+			}
+			groups[sid] = s
+			messages[sid] = []string{s.FirstMessage}
+			*order = append(*order, sid)
+		}
+	}
+}
+
+// orphanSessionFromTranscript reads the first few lines of a transcript to
+// extract basic session metadata for orphaned sessions.
+func orphanSessionFromTranscript(path string, sid string, encodedProject string) *SessionSummary {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	info, _ := f.Stat()
+
+	// Decode project path from directory name (- -> /).
+	project := strings.ReplaceAll(encodedProject, "-", "/")
+
+	s := &SessionSummary{
+		SessionID:   sid,
+		Project:     project,
+		ProjectName: projectName(project),
+	}
+
+	if info != nil {
+		s.LastTS = info.ModTime().UnixMilli()
+	}
+
+	// Scan for first user message.
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	for scanner.Scan() {
+		var entry transcriptEntry
+		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
+			continue
+		}
+		if entry.Type != "user" || entry.Message == nil {
+			if entry.Timestamp != "" && s.FirstTS == 0 {
+				// Use first entry timestamp as approximate start time.
+				// Parse ISO 8601 timestamp.
+				if t, err := parseTimestamp(entry.Timestamp); err == nil {
+					s.FirstTS = t
+				}
+			}
+			continue
+		}
+		var msg transcriptMessage
+		if err := json.Unmarshal(entry.Message, &msg); err != nil {
+			continue
+		}
+		content := strings.TrimSpace(string(msg.Content))
+		if len(content) > 0 && content[0] == '"' {
+			var text string
+			if err := json.Unmarshal(msg.Content, &text); err == nil && text != "" {
+				s.FirstMessage = text
+				if s.FirstTS == 0 {
+					if t, err := parseTimestamp(entry.Timestamp); err == nil {
+						s.FirstTS = t
+					}
+				}
+				s.MessageCount = 1
+				return s
+			}
+		}
+	}
+
+	// No user message found -- still return with file-based metadata.
+	if s.FirstTS == 0 {
+		s.FirstTS = s.LastTS
+	}
+	return s
+}
+
+// parseTimestamp parses an ISO 8601 timestamp string to unix milliseconds.
+func parseTimestamp(ts string) (int64, error) {
+	t, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		t, err = time.Parse("2006-01-02T15:04:05Z", ts)
+		if err != nil {
+			return 0, err
+		}
+	}
+	return t.UnixMilli(), nil
 }
 
 // projectName extracts the last path component from an absolute project path.
