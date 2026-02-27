@@ -144,7 +144,6 @@ func TestExportSessionMarkdown(t *testing.T) {
 
 	checks := []string{
 		"# Session md-session",
-		"**Project**: /Users/kfu/code/bar",
 		"**Rounds**: 1",
 		"## Round 1 (2026-02-26T19:02:00Z)",
 		"```prompt\nexplain this code\n```",
@@ -157,6 +156,11 @@ func TestExportSessionMarkdown(t *testing.T) {
 		if !strings.Contains(content, check) {
 			t.Errorf("markdown missing: %q", check)
 		}
+	}
+
+	// Project line should NOT be present.
+	if strings.Contains(content, "**Project**") {
+		t.Error("markdown should not contain Project line")
 	}
 }
 
@@ -232,6 +236,97 @@ func TestExportSessionRoundsSubset(t *testing.T) {
 	}
 	if rounds[0].RoundIndex != 0 || rounds[1].RoundIndex != 2 {
 		t.Errorf("round indices = %d, %d", rounds[0].RoundIndex, rounds[1].RoundIndex)
+	}
+}
+
+func TestGenerateMarkdownBlockRoles(t *testing.T) {
+	session := SessionSummary{SessionID: "block-test", Project: "/foo"}
+	transcript := &Transcript{
+		SessionID: "block-test",
+		Rounds: []Round{
+			{
+				Index:          0,
+				UserMessage:    "hello",
+				UserTimestamp:   "2026-02-26T11:00:00Z",
+				AssistantTexts: []string{"Hi there!"},
+				ThinkingTexts:  []string{"thinking..."},
+				ToolCalls:      []ToolCall{{Name: "Read", InputSummary: "/foo.go"}},
+				Usage:          Usage{InputTokens: 100, OutputTokens: 50},
+			},
+			{
+				Index:          1,
+				UserMessage:    "fix bug",
+				UserTimestamp:   "2026-02-26T11:01:00Z",
+				AssistantTexts: []string{"Done!"},
+				Usage:          Usage{InputTokens: 200, OutputTokens: 60},
+			},
+		},
+	}
+
+	// Export only "you" and "claude" from round 0, only "claude" from round 1.
+	blockRoles := map[int][]string{
+		0: {"you", "claude"},
+		1: {"claude"},
+	}
+	content := string(GenerateMarkdown(session, transcript, nil, blockRoles, true))
+
+	// Round 0: prompt and assistant should be present.
+	if !strings.Contains(content, "```prompt\nhello\n```") {
+		t.Error("round 0 should contain prompt block")
+	}
+	if !strings.Contains(content, "```assistant\nHi there!\n```") {
+		t.Error("round 0 should contain assistant block")
+	}
+	// Round 0: tool and thinking should be absent.
+	if strings.Contains(content, "tool_use") {
+		t.Error("round 0 should not contain tool block")
+	}
+	if strings.Contains(content, "thinking") {
+		t.Error("round 0 should not contain thinking block")
+	}
+
+	// Round 1: assistant only.
+	if !strings.Contains(content, "```assistant\nDone!\n```") {
+		t.Error("round 1 should contain assistant block")
+	}
+	if strings.Contains(content, "```prompt\nfix bug\n```") {
+		t.Error("round 1 should not contain prompt block")
+	}
+}
+
+func TestGenerateJSONLBlockRoles(t *testing.T) {
+	session := SessionSummary{SessionID: "jsonl-block", Project: "/foo"}
+	transcript := &Transcript{
+		SessionID: "jsonl-block",
+		Rounds: []Round{
+			{
+				Index:          0,
+				UserMessage:    "hello",
+				UserTimestamp:   "2026-02-26T11:00:00Z",
+				AssistantTexts: []string{"Hi!"},
+				ToolCalls:      []ToolCall{{Name: "Read", InputSummary: "/bar.go"}},
+				Usage:          Usage{InputTokens: 100, OutputTokens: 50},
+			},
+		},
+	}
+
+	// Export only "claude" block.
+	blockRoles := map[int][]string{0: {"claude"}}
+	out := GenerateJSONL(session, transcript, nil, blockRoles, true)
+
+	var er ExportRound
+	if err := json.Unmarshal(out[:len(out)-1], &er); err != nil {
+		t.Fatal(err)
+	}
+
+	if er.UserMessage != "" {
+		t.Errorf("user_message should be empty, got %q", er.UserMessage)
+	}
+	if len(er.ToolCalls) != 0 {
+		t.Errorf("tool_calls should be empty, got %v", er.ToolCalls)
+	}
+	if er.AssistantResponse != "Hi!" {
+		t.Errorf("assistant_response = %q, want %q", er.AssistantResponse, "Hi!")
 	}
 }
 

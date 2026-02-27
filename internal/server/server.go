@@ -89,10 +89,11 @@ type usageJSON struct {
 }
 
 type exportRequest struct {
-	SessionID       string `json:"session_id"`
-	Format          string `json:"format"`
-	RoundIndices    []int  `json:"round_indices,omitempty"`
-	IncludeThinking bool   `json:"include_thinking"`
+	SessionID       string              `json:"session_id"`
+	Format          string              `json:"format"`
+	RoundIndices    []int               `json:"round_indices,omitempty"`
+	BlockRoles      map[string][]string `json:"block_roles,omitempty"`
+	IncludeThinking bool                `json:"include_thinking"`
 }
 
 // --- Handlers ---
@@ -199,16 +200,28 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 		indices = req.RoundIndices
 	}
 
+	// Convert block_roles from string keys to int keys.
+	var blockRoles map[int][]string
+	if len(req.BlockRoles) > 0 {
+		blockRoles = make(map[int][]string, len(req.BlockRoles))
+		for k, v := range req.BlockRoles {
+			var idx int
+			if _, err := fmt.Sscanf(k, "%d", &idx); err == nil {
+				blockRoles[idx] = v
+			}
+		}
+	}
+
 	var content []byte
 	var filename string
 	var contentType string
 	switch req.Format {
 	case "md":
-		content = data.GenerateMarkdown(session, transcript, indices, req.IncludeThinking)
+		content = data.GenerateMarkdown(session, transcript, indices, blockRoles, req.IncludeThinking)
 		filename = req.SessionID + ".md"
 		contentType = "text/markdown; charset=utf-8"
 	default:
-		content = data.GenerateJSONL(session, transcript, indices, req.IncludeThinking)
+		content = data.GenerateJSONL(session, transcript, indices, blockRoles, req.IncludeThinking)
 		filename = req.SessionID + ".jsonl"
 		contentType = "application/x-ndjson"
 	}

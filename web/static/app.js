@@ -45,10 +45,10 @@ function doExport() {
     include_thinking: document.getElementById('export-thinking').checked,
   };
 
-  // If blocks are selected, export only the rounds that contain selected blocks.
-  var selectedRounds = getSelectedRoundIndices();
-  if (selectedRounds.length > 0) {
-    body.round_indices = selectedRounds;
+  // If blocks are selected, export only the selected block types per round.
+  var blockRoles = getSelectedBlocksByRound();
+  if (blockRoles) {
+    body.block_roles = blockRoles;
   }
 
   fetch('/api/export', {
@@ -329,6 +329,66 @@ function getSelectedRoundIndices() {
     result.push(parseInt(rkeys[j], 10));
   }
   result.sort(function(a, b) { return a - b; });
+  return result;
+}
+
+// Build a map of round index -> list of selected block roles.
+// Returns null if no blocks are selected.
+// Block roles are determined by matching blockIdx to the round's block structure
+// (same order as renderRound): user/context, tool, thinking, claude.
+function getSelectedBlocksByRound() {
+  var keys = Object.keys(state.selectedBlocks);
+  var hasSelection = false;
+  // Collect selected blockIdx per roundIdx.
+  var selected = {}; // roundIdx -> [blockIdx, ...]
+  for (var i = 0; i < keys.length; i++) {
+    if (!state.selectedBlocks[keys[i]]) continue;
+    var parts = keys[i].split('-');
+    if (parts.length < 3) continue;
+    var roundIdx = parseInt(parts[1], 10);
+    var blockIdx = parseInt(parts[2], 10);
+    if (isNaN(roundIdx) || isNaN(blockIdx)) continue;
+    if (!state.transcript || !state.transcript.rounds[roundIdx]) continue;
+    if (!selected[roundIdx]) selected[roundIdx] = [];
+    selected[roundIdx].push(blockIdx);
+    hasSelection = true;
+  }
+  if (!hasSelection) return null;
+
+  // Map blockIdx to role name using the same logic as renderRound.
+  var result = {};
+  var roundIdxKeys = Object.keys(selected);
+  for (var j = 0; j < roundIdxKeys.length; j++) {
+    var ri = parseInt(roundIdxKeys[j], 10);
+    var round = state.transcript.rounds[ri];
+    // Build ordered role list matching renderRound block order.
+    var roles = [];
+    if (round.user_html) {
+      roles.push(round.is_context ? 'context' : 'you');
+    }
+    if (round.tool_calls && round.tool_calls.length > 0) {
+      roles.push('tool');
+    }
+    if (round.thinking_html) {
+      roles.push('thinking');
+    }
+    if (round.assistant_html) {
+      roles.push('claude');
+    }
+    // Map selected blockIdx values to role names.
+    var roundRoles = [];
+    var blockIndices = selected[ri];
+    for (var k = 0; k < blockIndices.length; k++) {
+      var bi = blockIndices[k];
+      if (bi < roles.length) {
+        roundRoles.push(roles[bi]);
+      }
+    }
+    if (roundRoles.length > 0) {
+      // Key by the round's original index (from transcript data).
+      result[String(round.index)] = roundRoles;
+    }
+  }
   return result;
 }
 

@@ -83,7 +83,7 @@ func ExportSessionMarkdown(configDir string, session SessionSummary, transcript 
 	}
 	defer f.Close()
 
-	b := GenerateMarkdown(session, transcript, indices, includeThinking)
+	b := GenerateMarkdown(session, transcript, indices, nil, includeThinking)
 	if _, err := f.Write(b); err != nil {
 		return "", err
 	}
@@ -92,26 +92,26 @@ func ExportSessionMarkdown(configDir string, session SessionSummary, transcript 
 }
 
 // GenerateJSONL returns JSONL bytes for the given session/transcript.
-func GenerateJSONL(session SessionSummary, transcript *Transcript, indices []int, includeThinking bool) []byte {
+// When blockRoles is non-nil, it specifies which block types to include per round index.
+func GenerateJSONL(session SessionSummary, transcript *Transcript, indices []int, blockRoles map[int][]string, includeThinking bool) []byte {
 	var buf strings.Builder
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 
-	rounds := selectRounds(transcript.Rounds, indices)
+	rounds := selectRoundsWithBlockRoles(transcript.Rounds, indices, blockRoles)
 	for _, r := range rounds {
+		roles := blockRoles[r.Index]
+
 		tools := make([]ExportTool, len(r.ToolCalls))
 		for i, tc := range r.ToolCalls {
 			tools[i] = ExportTool{Name: tc.Name, InputSummary: tc.InputSummary}
 		}
 		er := ExportRound{
-			SessionID:         session.SessionID,
-			Timestamp:         r.UserTimestamp,
-			Project:           session.Project,
-			RoundIndex:        r.Index,
-			IsContext:         r.IsContext,
-			UserMessage:       r.UserMessage,
-			ToolCalls:         tools,
-			AssistantResponse: strings.Join(r.AssistantTexts, "\n"),
+			SessionID:  session.SessionID,
+			Timestamp:  r.UserTimestamp,
+			Project:    session.Project,
+			RoundIndex: r.Index,
+			IsContext:  r.IsContext,
 			Usage: ExportUsage{
 				InputTokens:   r.Usage.InputTokens,
 				OutputTokens:  r.Usage.OutputTokens,
@@ -119,8 +119,17 @@ func GenerateJSONL(session SessionSummary, transcript *Transcript, indices []int
 				CacheCreation: r.Usage.CacheCreation,
 			},
 		}
-		if includeThinking && len(r.ThinkingTexts) > 0 {
+		if shouldIncludeRole(roles, "you", "context") {
+			er.UserMessage = r.UserMessage
+		}
+		if shouldIncludeRole(roles, "tool") {
+			er.ToolCalls = tools
+		}
+		if includeThinking && len(r.ThinkingTexts) > 0 && shouldIncludeRole(roles, "thinking") {
 			er.ThinkingTexts = r.ThinkingTexts
+		}
+		if shouldIncludeRole(roles, "claude") {
+			er.AssistantResponse = strings.Join(r.AssistantTexts, "\n")
 		}
 		enc.Encode(er)
 	}
@@ -128,9 +137,10 @@ func GenerateJSONL(session SessionSummary, transcript *Transcript, indices []int
 }
 
 // GenerateMarkdown returns markdown bytes for the given session/transcript.
-func GenerateMarkdown(session SessionSummary, transcript *Transcript, indices []int, includeThinking bool) []byte {
+// When blockRoles is non-nil, it specifies which block types to include per round index.
+func GenerateMarkdown(session SessionSummary, transcript *Transcript, indices []int, blockRoles map[int][]string, includeThinking bool) []byte {
 	var buf strings.Builder
-	rounds := selectRounds(transcript.Rounds, indices)
+	rounds := selectRoundsWithBlockRoles(transcript.Rounds, indices, blockRoles)
 
 	var totalUsage Usage
 	for _, r := range rounds {
@@ -141,24 +151,24 @@ func GenerateMarkdown(session SessionSummary, transcript *Transcript, indices []
 	}
 
 	fmt.Fprintf(&buf, "# Session %s\n\n", session.SessionID)
-	fmt.Fprintf(&buf, "- **Project**: %s\n", session.Project)
 	fmt.Fprintf(&buf, "- **Rounds**: %d\n", len(rounds))
 	fmt.Fprintf(&buf, "- **Total tokens**: in=%d out=%d cache_read=%d cache_write=%d\n\n",
 		totalUsage.InputTokens, totalUsage.OutputTokens, totalUsage.CacheRead, totalUsage.CacheCreation)
 	fmt.Fprintf(&buf, "---\n\n")
 
 	for _, r := range rounds {
+		roles := blockRoles[r.Index]
 		ts := r.UserTimestamp
 		if ts == "" {
 			ts = "unknown"
 		}
 		fmt.Fprintf(&buf, "## Round %d (%s)\n\n", r.Index+1, ts)
 
-		if r.UserMessage != "" {
+		if r.UserMessage != "" && shouldIncludeRole(roles, "you", "context") {
 			fmt.Fprintf(&buf, "```prompt\n%s\n```\n\n", r.UserMessage)
 		}
 
-		if len(r.ToolCalls) > 0 {
+		if len(r.ToolCalls) > 0 && shouldIncludeRole(roles, "tool") {
 			fmt.Fprintf(&buf, "```tool_use\n")
 			for _, tc := range r.ToolCalls {
 				if tc.InputSummary != "" {
@@ -170,11 +180,11 @@ func GenerateMarkdown(session SessionSummary, transcript *Transcript, indices []
 			fmt.Fprintf(&buf, "```\n\n")
 		}
 
-		if includeThinking && len(r.ThinkingTexts) > 0 {
+		if includeThinking && len(r.ThinkingTexts) > 0 && shouldIncludeRole(roles, "thinking") {
 			fmt.Fprintf(&buf, "```thinking\n%s\n```\n\n", strings.Join(r.ThinkingTexts, "\n\n"))
 		}
 
-		if len(r.AssistantTexts) > 0 {
+		if len(r.AssistantTexts) > 0 && shouldIncludeRole(roles, "claude") {
 			fmt.Fprintf(&buf, "```assistant\n%s\n```\n\n", strings.Join(r.AssistantTexts, "\n"))
 		}
 
@@ -201,6 +211,38 @@ func selectRounds(rounds []Round, indices []int) []Round {
 		}
 	}
 	return result
+}
+
+// selectRoundsWithBlockRoles returns the subset of rounds to export.
+// When blockRoles is non-nil, it determines which rounds to include (by round index key).
+// Otherwise falls back to selectRounds with indices.
+func selectRoundsWithBlockRoles(rounds []Round, indices []int, blockRoles map[int][]string) []Round {
+	if blockRoles != nil {
+		var result []Round
+		for _, r := range rounds {
+			if _, ok := blockRoles[r.Index]; ok {
+				result = append(result, r)
+			}
+		}
+		return result
+	}
+	return selectRounds(rounds, indices)
+}
+
+// shouldIncludeRole returns true if the given role (or any of the alternates) should be included.
+// When roles is nil (no block-level filter for this round), all roles are included.
+func shouldIncludeRole(roles []string, names ...string) bool {
+	if roles == nil {
+		return true
+	}
+	for _, r := range roles {
+		for _, n := range names {
+			if r == n {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ConfigDir returns the cc-viewer config directory, respecting XDG_CONFIG_HOME.
