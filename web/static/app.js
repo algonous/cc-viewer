@@ -44,6 +44,13 @@ function doExport() {
     format: state.exportFormat,
     include_thinking: document.getElementById('export-thinking').checked,
   };
+
+  // If blocks are selected, export only the rounds that contain selected blocks.
+  var selectedRounds = getSelectedRoundIndices();
+  if (selectedRounds.length > 0) {
+    body.round_indices = selectedRounds;
+  }
+
   fetch('/api/export', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -301,6 +308,30 @@ function selectedBlockCount() {
   return count;
 }
 
+// Extract unique round indices from selected blocks.
+// Block IDs are "b-{roundIdx}-{blockIdx}".
+function getSelectedRoundIndices() {
+  var roundSet = {};
+  var keys = Object.keys(state.selectedBlocks);
+  for (var i = 0; i < keys.length; i++) {
+    if (!state.selectedBlocks[keys[i]]) continue;
+    var parts = keys[i].split('-');
+    if (parts.length >= 3) {
+      var roundIdx = parseInt(parts[1], 10);
+      if (!isNaN(roundIdx) && state.transcript && state.transcript.rounds[roundIdx]) {
+        roundSet[state.transcript.rounds[roundIdx].index] = true;
+      }
+    }
+  }
+  var result = [];
+  var rkeys = Object.keys(roundSet);
+  for (var j = 0; j < rkeys.length; j++) {
+    result.push(parseInt(rkeys[j], 10));
+  }
+  result.sort(function(a, b) { return a - b; });
+  return result;
+}
+
 // --- Selection actions ---
 
 function dumpSelected() {
@@ -376,6 +407,19 @@ document.getElementById('filter-input').addEventListener('input', function() {
   state.filterText = this.value;
   applyFilter();
   renderSidebar();
+
+  // If filter changed, reset viewer state.
+  if (state.filteredSessions.length > 0) {
+    loadTranscript(0);
+  } else {
+    state.currentSession = null;
+    state.transcript = null;
+    state.selectedBlocks = {};
+    state.sidebarIdx = -1;
+    renderViewer();
+    updateSelectionUI();
+    renderStatusBar();
+  }
 });
 
 // Session click.
