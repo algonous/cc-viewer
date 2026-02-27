@@ -18,10 +18,10 @@ type transcriptEntry struct {
 
 // transcriptMessage is the message field within a transcript entry.
 type transcriptMessage struct {
-	Role    string               `json:"role"`
-	Content json.RawMessage      `json:"content"`
-	Usage   *transcriptUsage     `json:"usage,omitempty"`
-	Model   string               `json:"model,omitempty"`
+	Role    string           `json:"role"`
+	Content json.RawMessage  `json:"content"`
+	Usage   *transcriptUsage `json:"usage,omitempty"`
+	Model   string           `json:"model,omitempty"`
 }
 
 // transcriptUsage holds the token usage from an assistant message.
@@ -41,7 +41,7 @@ type contentBlock struct {
 	Input    json.RawMessage `json:"input,omitempty"`
 }
 
-// LoadTranscript parses a transcript JSONL file into rounds.
+// LoadTranscript parses a transcript JSONL file into rounds with blocks in file order.
 func LoadTranscript(path string) (*Transcript, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -109,11 +109,16 @@ func handleUserEntry(t *Transcript, entry *transcriptEntry, currentRound *Round,
 		if err := json.Unmarshal(msg.Content, &text); err != nil {
 			return currentRound
 		}
+		isCtx := isSystemContext(text)
+		role := "you"
+		if isCtx {
+			role = "context"
+		}
 		r := Round{
 			Index:         *roundIndex,
-			UserMessage:   text,
 			UserTimestamp:  entry.Timestamp,
-			IsContext:      isSystemContext(text),
+			IsContext:      isCtx,
+			Blocks:        []Block{{Role: role, Text: text}},
 		}
 		*roundIndex++
 		t.Rounds = append(t.Rounds, r)
@@ -125,7 +130,7 @@ func handleUserEntry(t *Transcript, entry *transcriptEntry, currentRound *Round,
 }
 
 // handleAssistantEntry processes an assistant-type transcript entry,
-// appending text/tool data and usage to the last round.
+// appending blocks and usage to the last round.
 func handleAssistantEntry(t *Transcript, entry *transcriptEntry) {
 	if len(t.Rounds) == 0 {
 		return
@@ -140,7 +145,7 @@ func handleAssistantEntry(t *Transcript, entry *transcriptEntry) {
 		return
 	}
 
-	// Parse content blocks.
+	// Parse content blocks -- each becomes an individual Block in file order.
 	content := strings.TrimSpace(string(msg.Content))
 	if len(content) > 0 && content[0] == '[' {
 		var blocks []contentBlock
@@ -149,25 +154,23 @@ func handleAssistantEntry(t *Transcript, entry *transcriptEntry) {
 				switch b.Type {
 				case "text":
 					if b.Text != "" {
-						r.AssistantTexts = append(r.AssistantTexts, b.Text)
+						r.Blocks = append(r.Blocks, Block{Role: "claude", Text: b.Text})
 					}
 				case "thinking":
 					if b.Thinking != "" {
-						r.ThinkingTexts = append(r.ThinkingTexts, b.Thinking)
+						r.Blocks = append(r.Blocks, Block{Role: "thinking", Text: b.Thinking})
 					}
 				case "tool_use":
 					tc := ToolCall{Name: b.Name, InputSummary: toolInputSummary(b.Name, b.Input)}
-					r.ToolCalls = append(r.ToolCalls, tc)
+					r.Blocks = append(r.Blocks, Block{Role: "tool", ToolCall: &tc})
 				}
 			}
 		}
 	}
 
-	// Aggregate usage. Only count output tokens to avoid double-counting input
-	// (input tokens are the same across all entries in the same API call).
+	// Aggregate usage. Output tokens are summed; input/cache tokens take max.
 	if msg.Usage != nil {
 		r.Usage.OutputTokens += msg.Usage.OutputTokens
-		// Take the max of input/cache tokens (they repeat per entry in same call).
 		if msg.Usage.InputTokens > r.Usage.InputTokens {
 			r.Usage.InputTokens = msg.Usage.InputTokens
 		}

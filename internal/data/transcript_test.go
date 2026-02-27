@@ -37,33 +37,49 @@ func TestLoadTranscript(t *testing.T) {
 		t.Fatalf("expected 2 rounds, got %d", len(tr.Rounds))
 	}
 
-	// Round 0: "hello there" + tool call + assistant texts.
+	// Round 0: blocks in file order.
 	r0 := tr.Rounds[0]
 	if r0.IsContext {
 		t.Error("round 0 should not be context")
 	}
-	if r0.UserMessage != "hello there" {
-		t.Errorf("round 0 user message = %q", r0.UserMessage)
-	}
 	if r0.UserTimestamp != "2026-02-26T11:00:00Z" {
 		t.Errorf("round 0 timestamp = %q", r0.UserTimestamp)
 	}
-	if len(r0.AssistantTexts) != 2 {
-		t.Errorf("round 0 expected 2 assistant texts, got %d", len(r0.AssistantTexts))
+
+	// Round 0 should have 5 blocks: you, thinking, claude, tool, claude
+	if len(r0.Blocks) != 5 {
+		t.Fatalf("round 0 expected 5 blocks, got %d", len(r0.Blocks))
 	}
-	if len(r0.ThinkingTexts) != 1 || r0.ThinkingTexts[0] != "hmm" {
-		t.Errorf("round 0 thinking texts = %v, want [hmm]", r0.ThinkingTexts)
+
+	// Block 0: you
+	if r0.Blocks[0].Role != "you" || r0.Blocks[0].Text != "hello there" {
+		t.Errorf("block 0: role=%q text=%q", r0.Blocks[0].Role, r0.Blocks[0].Text)
 	}
-	if len(r0.ToolCalls) != 1 {
-		t.Fatalf("round 0 expected 1 tool call, got %d", len(r0.ToolCalls))
+
+	// Block 1: thinking
+	if r0.Blocks[1].Role != "thinking" || r0.Blocks[1].Text != "hmm" {
+		t.Errorf("block 1: role=%q text=%q", r0.Blocks[1].Role, r0.Blocks[1].Text)
 	}
-	if r0.ToolCalls[0].Name != "Read" {
-		t.Errorf("tool call name = %q", r0.ToolCalls[0].Name)
+
+	// Block 2: claude
+	if r0.Blocks[2].Role != "claude" || r0.Blocks[2].Text != "Hi! How can I help?" {
+		t.Errorf("block 2: role=%q text=%q", r0.Blocks[2].Role, r0.Blocks[2].Text)
 	}
-	if r0.ToolCalls[0].InputSummary != "/foo/bar.go" {
-		t.Errorf("tool call input summary = %q", r0.ToolCalls[0].InputSummary)
+
+	// Block 3: tool
+	if r0.Blocks[3].Role != "tool" || r0.Blocks[3].ToolCall == nil {
+		t.Fatalf("block 3: role=%q toolcall=%v", r0.Blocks[3].Role, r0.Blocks[3].ToolCall)
 	}
-	// Usage: output_tokens should be summed (50+30+40=120), input should be max (150).
+	if r0.Blocks[3].ToolCall.Name != "Read" || r0.Blocks[3].ToolCall.InputSummary != "/foo/bar.go" {
+		t.Errorf("block 3 tool: name=%q input=%q", r0.Blocks[3].ToolCall.Name, r0.Blocks[3].ToolCall.InputSummary)
+	}
+
+	// Block 4: claude (after tool_result)
+	if r0.Blocks[4].Role != "claude" || r0.Blocks[4].Text != "The file contains some Go code." {
+		t.Errorf("block 4: role=%q text=%q", r0.Blocks[4].Role, r0.Blocks[4].Text)
+	}
+
+	// Usage: output_tokens summed (50+30+40=120), input max (150).
 	if r0.Usage.OutputTokens != 120 {
 		t.Errorf("round 0 output tokens = %d, want 120", r0.Usage.OutputTokens)
 	}
@@ -74,10 +90,16 @@ func TestLoadTranscript(t *testing.T) {
 		t.Errorf("round 0 cache read = %d, want 300", r0.Usage.CacheRead)
 	}
 
-	// Round 1: "now fix the bug".
+	// Round 1: 2 blocks (you, claude).
 	r1 := tr.Rounds[1]
-	if r1.UserMessage != "now fix the bug" {
-		t.Errorf("round 1 user message = %q", r1.UserMessage)
+	if len(r1.Blocks) != 2 {
+		t.Fatalf("round 1 expected 2 blocks, got %d", len(r1.Blocks))
+	}
+	if r1.Blocks[0].Role != "you" || r1.Blocks[0].Text != "now fix the bug" {
+		t.Errorf("round 1 block 0: role=%q text=%q", r1.Blocks[0].Role, r1.Blocks[0].Text)
+	}
+	if r1.Blocks[1].Role != "claude" || r1.Blocks[1].Text != "I will fix the bug now." {
+		t.Errorf("round 1 block 1: role=%q text=%q", r1.Blocks[1].Role, r1.Blocks[1].Text)
 	}
 	if r1.Usage.OutputTokens != 60 {
 		t.Errorf("round 1 output tokens = %d, want 60", r1.Usage.OutputTokens)
@@ -104,14 +126,29 @@ func TestLoadTranscriptContext(t *testing.T) {
 	if len(tr.Rounds) != 3 {
 		t.Fatalf("expected 3 rounds, got %d", len(tr.Rounds))
 	}
+
+	// Round 0: plan impl -> context block.
 	if !tr.Rounds[0].IsContext {
 		t.Error("round 0 (plan impl) should be context")
 	}
+	if tr.Rounds[0].Blocks[0].Role != "context" {
+		t.Errorf("round 0 block 0 role = %q, want context", tr.Rounds[0].Blocks[0].Role)
+	}
+
+	// Round 1: continuation -> context block.
 	if !tr.Rounds[1].IsContext {
 		t.Error("round 1 (continuation) should be context")
 	}
+	if tr.Rounds[1].Blocks[0].Role != "context" {
+		t.Errorf("round 1 block 0 role = %q, want context", tr.Rounds[1].Blocks[0].Role)
+	}
+
+	// Round 2: real user message -> you block.
 	if tr.Rounds[2].IsContext {
 		t.Error("round 2 (real user msg) should not be context")
+	}
+	if tr.Rounds[2].Blocks[0].Role != "you" {
+		t.Errorf("round 2 block 0 role = %q, want you", tr.Rounds[2].Blocks[0].Role)
 	}
 }
 

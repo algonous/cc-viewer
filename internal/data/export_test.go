@@ -1,7 +1,6 @@
 package data
 
 import (
-	"bufio"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,291 +8,210 @@ import (
 	"testing"
 )
 
-func TestExportSession(t *testing.T) {
-	configDir := t.TempDir()
-
+func testTranscript() (*Transcript, SessionSummary) {
 	session := SessionSummary{
 		SessionID:   "test-session",
 		Project:     "/Users/kfu/code/foo",
 		ProjectName: "foo",
 	}
-
 	transcript := &Transcript{
 		SessionID: "test-session",
 		Rounds: []Round{
 			{
-				Index:          0,
-				UserMessage:    "hello",
-				UserTimestamp:   "2026-02-26T11:00:00Z",
-				AssistantTexts: []string{"Hi there!", "How can I help?"},
-				ThinkingTexts:  []string{"let me think about this"},
-				ToolCalls: []ToolCall{
-					{Name: "Read", InputSummary: "/foo/bar.go"},
+				Index:         0,
+				UserTimestamp:  "2026-02-26T11:00:00Z",
+				Blocks: []Block{
+					{Role: "you", Text: "hello"},
+					{Role: "thinking", Text: "let me think about this"},
+					{Role: "tool", ToolCall: &ToolCall{Name: "Read", InputSummary: "/foo/bar.go"}},
+					{Role: "claude", Text: "Hi there!"},
+					{Role: "claude", Text: "How can I help?"},
 				},
 				Usage: Usage{InputTokens: 100, OutputTokens: 50, CacheRead: 200, CacheCreation: 10},
 			},
 			{
-				Index:          1,
-				UserMessage:    "fix bug",
-				UserTimestamp:   "2026-02-26T11:01:00Z",
-				AssistantTexts: []string{"Done!"},
-				Usage:          Usage{InputTokens: 200, OutputTokens: 60},
+				Index:         1,
+				UserTimestamp:  "2026-02-26T11:01:00Z",
+				Blocks: []Block{
+					{Role: "you", Text: "fix bug"},
+					{Role: "claude", Text: "Done!"},
+				},
+				Usage: Usage{InputTokens: 200, OutputTokens: 60},
 			},
 		},
 	}
+	return transcript, session
+}
 
-	outPath, err := ExportSession(configDir, session, transcript)
-	if err != nil {
+func TestGenerateJSONLAll(t *testing.T) {
+	transcript, session := testTranscript()
+	out := GenerateJSONL(session, transcript, nil)
+
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	// 5 blocks in round 0 + 2 blocks in round 1 = 7 lines.
+	if len(lines) != 7 {
+		t.Fatalf("expected 7 lines, got %d", len(lines))
+	}
+
+	var first ExportBlock
+	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
 		t.Fatal(err)
 	}
-
-	expectedPath := filepath.Join(configDir, "exports", "test-session.jsonl")
-	if outPath != expectedPath {
-		t.Errorf("output path = %q, want %q", outPath, expectedPath)
+	if first.SessionID != "test-session" {
+		t.Errorf("session_id = %q", first.SessionID)
+	}
+	if first.RoundIndex != 0 || first.BlockIndex != 0 {
+		t.Errorf("first block: round=%d block=%d", first.RoundIndex, first.BlockIndex)
+	}
+	if first.Role != "you" || first.Text != "hello" {
+		t.Errorf("first block: role=%q text=%q", first.Role, first.Text)
 	}
 
-	f, err := os.Open(outPath)
-	if err != nil {
+	// Check tool block (index 2 in round 0).
+	var tool ExportBlock
+	if err := json.Unmarshal([]byte(lines[2]), &tool); err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
-
-	var rounds []ExportRound
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		var er ExportRound
-		if err := json.Unmarshal(scanner.Bytes(), &er); err != nil {
-			t.Fatal(err)
-		}
-		rounds = append(rounds, er)
+	if tool.Role != "tool" || tool.Name != "Read" || tool.InputSummary != "/foo/bar.go" {
+		t.Errorf("tool block: role=%q name=%q input=%q", tool.Role, tool.Name, tool.InputSummary)
+	}
+	if tool.Text != "" {
+		t.Errorf("tool block should have no text, got %q", tool.Text)
 	}
 
-	if len(rounds) != 2 {
-		t.Fatalf("expected 2 export rounds, got %d", len(rounds))
+	// Last line: round 1, block 1 (claude, "Done!").
+	var last ExportBlock
+	if err := json.Unmarshal([]byte(lines[6]), &last); err != nil {
+		t.Fatal(err)
 	}
-
-	r0 := rounds[0]
-	if r0.SessionID != "test-session" {
-		t.Errorf("session_id = %q", r0.SessionID)
-	}
-	if r0.UserMessage != "hello" {
-		t.Errorf("user_message = %q", r0.UserMessage)
-	}
-	if r0.AssistantResponse != "Hi there!\nHow can I help?" {
-		t.Errorf("assistant_response = %q", r0.AssistantResponse)
-	}
-	if len(r0.ToolCalls) != 1 || r0.ToolCalls[0].Name != "Read" {
-		t.Errorf("tool_calls = %v", r0.ToolCalls)
-	}
-	if r0.Usage.InputTokens != 100 || r0.Usage.OutputTokens != 50 {
-		t.Errorf("usage = %+v", r0.Usage)
-	}
-	if len(r0.ThinkingTexts) != 1 || r0.ThinkingTexts[0] != "let me think about this" {
-		t.Errorf("thinking_texts = %v", r0.ThinkingTexts)
-	}
-
-	// Round 1 should have no thinking.
-	r1 := rounds[1]
-	if len(r1.ThinkingTexts) != 0 {
-		t.Errorf("round 1 thinking_texts should be empty, got %v", r1.ThinkingTexts)
+	if last.RoundIndex != 1 || last.BlockIndex != 1 || last.Role != "claude" || last.Text != "Done!" {
+		t.Errorf("last block: round=%d block=%d role=%q text=%q", last.RoundIndex, last.BlockIndex, last.Role, last.Text)
 	}
 }
 
-func TestExportSessionMarkdown(t *testing.T) {
-	configDir := t.TempDir()
+func TestGenerateJSONLSelectedBlocks(t *testing.T) {
+	transcript, session := testTranscript()
 
-	session := SessionSummary{
-		SessionID:   "md-session",
-		Project:     "/Users/kfu/code/bar",
-		ProjectName: "bar",
+	// Select: round 0 block 0 (you), round 0 block 3 (claude), round 1 block 1 (claude).
+	blocks := [][2]int{{0, 0}, {0, 3}, {1, 1}}
+	out := GenerateJSONL(session, transcript, blocks)
+
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 lines, got %d", len(lines))
 	}
 
-	transcript := &Transcript{
-		SessionID: "md-session",
-		Rounds: []Round{
-			{
-				Index:          0,
-				UserMessage:    "explain this code",
-				UserTimestamp:   "2026-02-26T19:02:00Z",
-				AssistantTexts: []string{"This code does XYZ."},
-				ThinkingTexts:  []string{"chain of thought here"},
-				ToolCalls: []ToolCall{
-					{Name: "Read", InputSummary: "/path/to/file.go"},
-					{Name: "Bash", InputSummary: "ls -la"},
-				},
-				Usage: Usage{InputTokens: 3, OutputTokens: 720, CacheRead: 34582, CacheCreation: 1593},
-			},
-		},
+	var b0 ExportBlock
+	json.Unmarshal([]byte(lines[0]), &b0)
+	if b0.Role != "you" || b0.Text != "hello" {
+		t.Errorf("block 0: role=%q text=%q", b0.Role, b0.Text)
 	}
 
-	outPath, err := ExportSessionMarkdown(configDir, session, transcript, nil)
-	if err != nil {
-		t.Fatal(err)
+	var b1 ExportBlock
+	json.Unmarshal([]byte(lines[1]), &b1)
+	if b1.Role != "claude" || b1.Text != "Hi there!" {
+		t.Errorf("block 1: role=%q text=%q", b1.Role, b1.Text)
+	}
+	if b1.RoundIndex != 0 || b1.BlockIndex != 3 {
+		t.Errorf("block 1: round=%d block=%d", b1.RoundIndex, b1.BlockIndex)
 	}
 
-	expectedPath := filepath.Join(configDir, "exports", "md-session.md")
-	if outPath != expectedPath {
-		t.Errorf("output path = %q, want %q", outPath, expectedPath)
+	var b2 ExportBlock
+	json.Unmarshal([]byte(lines[2]), &b2)
+	if b2.Role != "claude" || b2.Text != "Done!" || b2.RoundIndex != 1 {
+		t.Errorf("block 2: role=%q text=%q round=%d", b2.Role, b2.Text, b2.RoundIndex)
 	}
+}
 
-	data, err := os.ReadFile(outPath)
-	if err != nil {
-		t.Fatal(err)
+func TestGenerateJSONLInvalidBlocks(t *testing.T) {
+	transcript, session := testTranscript()
+
+	// Include some invalid block references that should be skipped.
+	blocks := [][2]int{{0, 0}, {99, 0}, {0, 99}}
+	out := GenerateJSONL(session, transcript, blocks)
+
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line (invalid refs skipped), got %d", len(lines))
 	}
-	content := string(data)
+}
+
+func TestGenerateMarkdownAll(t *testing.T) {
+	transcript, session := testTranscript()
+	content := string(GenerateMarkdown(session, transcript, nil))
 
 	checks := []string{
-		"---\nsession: md-session\n",
-		"rounds: 1\n",
-		"total_tokens:\n  in: 3\n  out: 720\n  cache_read: 34582\n  cache_write: 1593\n---",
-		"## Round 1 (2026-02-26T19:02:00Z)",
-		"```prompt\nexplain this code\n```",
-		"```tool_use\nRead: /path/to/file.go\nBash: ls -la\n```",
-		"```thinking\nchain of thought here\n```",
-		"```assistant\nThis code does XYZ.\n```",
+		"---\nsession: test-session\n",
+		"project: /Users/kfu/code/foo\n",
+		"exported_blocks: 7\n",
+		"---",
+		"## Round 1 (2026-02-26T11:00:00Z)",
+		"```prompt\nhello\n```",
+		"```thinking\nlet me think about this\n```",
+		"```tool_use\nRead: /foo/bar.go\n```",
+		"```assistant\nHi there!\n```",
+		"```assistant\nHow can I help?\n```",
+		"## Round 2 (2026-02-26T11:01:00Z)",
+		"```prompt\nfix bug\n```",
+		"```assistant\nDone!\n```",
 	}
 	for _, check := range checks {
 		if !strings.Contains(content, check) {
 			t.Errorf("markdown missing: %q", check)
 		}
 	}
-
-	// Per-round token lines should NOT be present.
-	if strings.Contains(content, "> Tokens:") {
-		t.Error("markdown should not contain per-round token lines")
-	}
 }
 
-func TestExportSessionRoundsSubset(t *testing.T) {
-	configDir := t.TempDir()
+func TestGenerateMarkdownSelectedBlocks(t *testing.T) {
+	transcript, session := testTranscript()
 
-	session := SessionSummary{SessionID: "sub", Project: "/foo"}
-	transcript := &Transcript{
-		SessionID: "sub",
-		Rounds: []Round{
-			{Index: 0, UserMessage: "r0", UserTimestamp: "t0", AssistantTexts: []string{"a0"}},
-			{Index: 1, UserMessage: "r1", UserTimestamp: "t1", AssistantTexts: []string{"a1"}},
-			{Index: 2, UserMessage: "r2", UserTimestamp: "t2", AssistantTexts: []string{"a2"}},
-		},
+	// Select: round 0 block 0 (you) + block 3 (claude), round 1 block 1 (claude).
+	blocks := [][2]int{{0, 0}, {0, 3}, {1, 1}}
+	content := string(GenerateMarkdown(session, transcript, blocks))
+
+	// Frontmatter should show 3 exported blocks.
+	if !strings.Contains(content, "exported_blocks: 3") {
+		t.Error("expected exported_blocks: 3")
 	}
 
-	outPath, err := ExportSessionRounds(configDir, session, transcript, []int{0, 2})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	f, err := os.Open(outPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-
-	var rounds []ExportRound
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		var er ExportRound
-		if err := json.Unmarshal(scanner.Bytes(), &er); err != nil {
-			t.Fatal(err)
-		}
-		rounds = append(rounds, er)
-	}
-
-	if len(rounds) != 2 {
-		t.Fatalf("expected 2 rounds, got %d", len(rounds))
-	}
-	if rounds[0].RoundIndex != 0 || rounds[1].RoundIndex != 2 {
-		t.Errorf("round indices = %d, %d", rounds[0].RoundIndex, rounds[1].RoundIndex)
-	}
-}
-
-func TestGenerateMarkdownBlockRoles(t *testing.T) {
-	session := SessionSummary{SessionID: "block-test", Project: "/foo"}
-	transcript := &Transcript{
-		SessionID: "block-test",
-		Rounds: []Round{
-			{
-				Index:          0,
-				UserMessage:    "hello",
-				UserTimestamp:   "2026-02-26T11:00:00Z",
-				AssistantTexts: []string{"Hi there!"},
-				ThinkingTexts:  []string{"thinking..."},
-				ToolCalls:      []ToolCall{{Name: "Read", InputSummary: "/foo.go"}},
-				Usage:          Usage{InputTokens: 100, OutputTokens: 50},
-			},
-			{
-				Index:          1,
-				UserMessage:    "fix bug",
-				UserTimestamp:   "2026-02-26T11:01:00Z",
-				AssistantTexts: []string{"Done!"},
-				Usage:          Usage{InputTokens: 200, OutputTokens: 60},
-			},
-		},
-	}
-
-	// Export only "you" and "claude" from round 0, only "claude" from round 1.
-	blockRoles := map[int][]string{
-		0: {"you", "claude"},
-		1: {"claude"},
-	}
-	content := string(GenerateMarkdown(session, transcript, nil, blockRoles))
-
-	// Round 0: prompt and assistant should be present.
+	// Round 1 should have prompt and assistant.
 	if !strings.Contains(content, "```prompt\nhello\n```") {
-		t.Error("round 0 should contain prompt block")
+		t.Error("should contain prompt block")
 	}
 	if !strings.Contains(content, "```assistant\nHi there!\n```") {
-		t.Error("round 0 should contain assistant block")
-	}
-	// Round 0: tool and thinking should be absent.
-	if strings.Contains(content, "tool_use") {
-		t.Error("round 0 should not contain tool block")
-	}
-	if strings.Contains(content, "thinking") {
-		t.Error("round 0 should not contain thinking block")
+		t.Error("should contain assistant block")
 	}
 
-	// Round 1: assistant only.
+	// Thinking and tool should NOT be present (not selected).
+	if strings.Contains(content, "thinking") {
+		t.Error("should not contain thinking block")
+	}
+	if strings.Contains(content, "tool_use") {
+		t.Error("should not contain tool block")
+	}
+
+	// Round 2: only claude.
 	if !strings.Contains(content, "```assistant\nDone!\n```") {
-		t.Error("round 1 should contain assistant block")
+		t.Error("should contain Done assistant block")
 	}
 	if strings.Contains(content, "```prompt\nfix bug\n```") {
-		t.Error("round 1 should not contain prompt block")
+		t.Error("round 2 should not contain prompt block")
 	}
 }
 
-func TestGenerateJSONLBlockRoles(t *testing.T) {
-	session := SessionSummary{SessionID: "jsonl-block", Project: "/foo"}
-	transcript := &Transcript{
-		SessionID: "jsonl-block",
-		Rounds: []Round{
-			{
-				Index:          0,
-				UserMessage:    "hello",
-				UserTimestamp:   "2026-02-26T11:00:00Z",
-				AssistantTexts: []string{"Hi!"},
-				ToolCalls:      []ToolCall{{Name: "Read", InputSummary: "/bar.go"}},
-				Usage:          Usage{InputTokens: 100, OutputTokens: 50},
-			},
-		},
-	}
+func TestGenerateMarkdownOmitsEmptyRounds(t *testing.T) {
+	transcript, session := testTranscript()
 
-	// Export only "claude" block.
-	blockRoles := map[int][]string{0: {"claude"}}
-	out := GenerateJSONL(session, transcript, nil, blockRoles)
+	// Select only blocks from round 1, nothing from round 0.
+	blocks := [][2]int{{1, 0}, {1, 1}}
+	content := string(GenerateMarkdown(session, transcript, blocks))
 
-	var er ExportRound
-	if err := json.Unmarshal(out[:len(out)-1], &er); err != nil {
-		t.Fatal(err)
+	// Only Round 2 header should be present.
+	if strings.Contains(content, "## Round 1") {
+		t.Error("round 1 should be omitted (no blocks selected)")
 	}
-
-	if er.UserMessage != "" {
-		t.Errorf("user_message should be empty, got %q", er.UserMessage)
-	}
-	if len(er.ToolCalls) != 0 {
-		t.Errorf("tool_calls should be empty, got %v", er.ToolCalls)
-	}
-	if er.AssistantResponse != "Hi!" {
-		t.Errorf("assistant_response = %q, want %q", er.AssistantResponse, "Hi!")
+	if !strings.Contains(content, "## Round 2") {
+		t.Error("round 2 should be present")
 	}
 }
 

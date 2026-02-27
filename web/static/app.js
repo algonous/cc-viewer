@@ -20,8 +20,15 @@ function fetchJSON(url) {
   return fetch(url).then(function(r) { return r.json(); });
 }
 
+var pollTimer = null;
+
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
 function loadTranscript(idx) {
   if (idx < 0 || idx >= state.filteredSessions.length) return;
+  stopPolling();
   state.sidebarIdx = idx;
   state.currentSession = state.filteredSessions[idx];
   state.selectedBlocks = {};
@@ -34,7 +41,106 @@ function loadTranscript(idx) {
     renderViewer();
     updateSelectionUI();
     renderStatusBar();
+    startPolling(sid);
   });
+}
+
+function startPolling(sid) {
+  stopPolling();
+  pollTimer = setInterval(function() {
+    if (!state.currentSession || state.currentSession.session_id !== sid) {
+      stopPolling();
+      return;
+    }
+    fetchJSON('/api/transcript/' + sid).then(function(data) {
+      if (!state.transcript || !data || !data.rounds) return;
+      var oldLen = state.transcript.rounds.length;
+      var newLen = data.rounds.length;
+      if (newLen < oldLen) return;
+
+      var content = document.getElementById('viewer-content');
+      var changed = false;
+
+      // Check if the last existing round was updated (in-progress round growing).
+      if (oldLen > 0 && newLen >= oldLen) {
+        var lastIdx = oldLen - 1;
+        var oldRound = state.transcript.rounds[lastIdx];
+        var newRound = data.rounds[lastIdx];
+        if (roundChanged(oldRound, newRound)) {
+          state.transcript.rounds[lastIdx] = newRound;
+          var oldEl = content.querySelector('.round[data-round-idx="' + lastIdx + '"]');
+          if (oldEl) {
+            var tmp = document.createElement('div');
+            tmp.innerHTML = renderRound(newRound, lastIdx);
+            var newEl = tmp.firstChild;
+            content.replaceChild(newEl, oldEl);
+            initBlocks(newEl);
+          }
+          changed = true;
+        }
+      }
+
+      // Append new rounds.
+      if (newLen > oldLen) {
+        var html = '';
+        for (var i = oldLen; i < newLen; i++) {
+          state.transcript.rounds.push(data.rounds[i]);
+          html += renderRound(data.rounds[i], i);
+        }
+        content.insertAdjacentHTML('beforeend', html);
+        var newRoundEls = content.querySelectorAll('.round');
+        for (var j = oldLen; j < newRoundEls.length; j++) {
+          initBlocks(newRoundEls[j]);
+        }
+        changed = true;
+      }
+
+      if (!changed) return;
+
+      // Update title and status bar.
+      var s = state.currentSession;
+      var title = document.getElementById('viewer-title');
+      title.textContent = (s ? s.project_name + ' -- ' : '') + state.transcript.rounds.length + ' rounds';
+      renderStatusBar();
+    });
+  }, 2000);
+}
+
+// Compare two round objects to detect changes (new blocks, updated content).
+function roundChanged(oldR, newR) {
+  var ob = oldR.blocks || [];
+  var nb = newR.blocks || [];
+  if (ob.length !== nb.length) return true;
+  for (var i = 0; i < ob.length; i++) {
+    if (ob[i].html !== nb[i].html || ob[i].name !== nb[i].name ||
+        ob[i].input_summary !== nb[i].input_summary) return true;
+  }
+  return false;
+}
+
+// Initialize fold summaries and toggle handlers for blocks within a container element.
+function initBlocks(container) {
+  var blocks = container.querySelectorAll('.chat-block');
+  for (var i = 0; i < blocks.length; i++) {
+    var block = blocks[i];
+    var summaryEl = block.querySelector('.fold-summary');
+    var body = block.querySelector('.fold-body');
+    if (summaryEl && body) {
+      var text;
+      if (block.classList.contains('chat-tool')) {
+        var nameEl = body.querySelector('.tool-name');
+        var inputEl = body.querySelector('.tool-input');
+        text = (nameEl ? nameEl.textContent : '');
+        if (inputEl && inputEl.textContent) text += ': ' + inputEl.textContent;
+      } else {
+        text = (body.textContent || '').trim().replace(/\s+/g, ' ');
+        text = truncate(text, 80);
+      }
+      summaryEl.textContent = text;
+    }
+    var header = block.querySelector('.block-header');
+    if (header) header.addEventListener('click', foldToggleHandler);
+  }
 }
 
 function doExport() {
@@ -44,10 +150,10 @@ function doExport() {
     format: state.exportFormat,
   };
 
-  // If blocks are selected, export only the selected block types per round.
-  var blockRoles = getSelectedBlocksByRound();
-  if (blockRoles) {
-    body.block_roles = blockRoles;
+  // If blocks are selected, export only the selected blocks.
+  var blocks = getSelectedBlocks();
+  if (blocks) {
+    body.blocks = blocks;
   }
 
   fetch('/api/export', {
@@ -160,29 +266,22 @@ function renderRound(round, idx) {
     tokens +
     '</div>';
 
-  // Render each block from structured data.
-  var blockIdx = 0;
-
-  // User / Context block.
-  if (round.user_html) {
-    var role = round.is_context ? 'context' : 'you';
-    html += renderBlock(idx, blockIdx++, role, round.user_html);
-  }
-
-  // Tool calls block.
-  if (round.tool_calls && round.tool_calls.length > 0) {
-    var toolHtml = renderToolCalls(round.tool_calls);
-    html += renderBlock(idx, blockIdx++, 'tool', toolHtml);
-  }
-
-  // Thinking block.
-  if (round.thinking_html) {
-    html += renderBlock(idx, blockIdx++, 'thinking', round.thinking_html);
-  }
-
-  // Assistant block.
-  if (round.assistant_html) {
-    html += renderBlock(idx, blockIdx++, 'claude', round.assistant_html);
+  // Render blocks in file order.
+  var blocks = round.blocks || [];
+  for (var i = 0; i < blocks.length; i++) {
+    var b = blocks[i];
+    var contentHtml;
+    if (b.role === 'tool') {
+      contentHtml = '<div class="tool-list"><div class="tool-item">' +
+        '<span class="tool-name">' + escapeHtml(b.name || '') + '</span>';
+      if (b.input_summary) {
+        contentHtml += '<span class="tool-input">' + escapeHtml(b.input_summary) + '</span>';
+      }
+      contentHtml += '</div></div>';
+    } else {
+      contentHtml = b.html || '';
+    }
+    html += renderBlock(idx, i, b.role, contentHtml);
   }
 
   html += '</div>';
@@ -196,15 +295,6 @@ function renderBlock(roundIdx, blockIdx, role, contentHtml) {
   var startOpen = !FOLD_CLOSED[role];
   var checked = state.selectedBlocks[blockId] ? ' checked' : '';
   var checkedClass = state.selectedBlocks[blockId] ? ' block-checked' : '';
-
-  // Summary: first ~80 chars of text content for the folded preview.
-  var summary = '';
-  if (role === 'tool') {
-    // Already handled in the fold summary by the tool call count text.
-    // We'll set it below.
-  }
-  // We'll extract summary from a temp element later -- for now use a placeholder.
-  // Actually, let's just build the summary inline from data.
 
   var html = '<div class="chat-block chat-' + role + checkedClass + '" data-block-id="' + blockId + '">';
 
@@ -223,22 +313,6 @@ function renderBlock(roundIdx, blockIdx, role, contentHtml) {
   return html;
 }
 
-// Render tool calls as structured HTML (not via markdown).
-function renderToolCalls(toolCalls) {
-  var html = '<div class="tool-list">';
-  for (var i = 0; i < toolCalls.length; i++) {
-    var tc = toolCalls[i];
-    html += '<div class="tool-item">' +
-      '<span class="tool-name">' + escapeHtml(tc.name) + '</span>';
-    if (tc.input_summary) {
-      html += '<span class="tool-input">' + escapeHtml(tc.input_summary) + '</span>';
-    }
-    html += '</div>';
-  }
-  html += '</div>';
-  return html;
-}
-
 // After innerHTML is set, fill in fold summaries from rendered content.
 function fillFoldSummaries() {
   var blocks = document.querySelectorAll('#viewer-content .chat-block');
@@ -252,8 +326,10 @@ function fillFoldSummaries() {
 
     var text = '';
     if (block.classList.contains('chat-tool')) {
-      var items = body.querySelectorAll('.tool-item');
-      text = items.length + ' tool call' + (items.length !== 1 ? 's' : '');
+      var nameEl = body.querySelector('.tool-name');
+      var inputEl = body.querySelector('.tool-input');
+      text = (nameEl ? nameEl.textContent : '');
+      if (inputEl && inputEl.textContent) text += ': ' + inputEl.textContent;
     } else {
       text = (body.textContent || '').trim().replace(/\s+/g, ' ');
       text = truncate(text, 80);
@@ -307,39 +383,11 @@ function selectedBlockCount() {
   return count;
 }
 
-// Extract unique round indices from selected blocks.
-// Block IDs are "b-{roundIdx}-{blockIdx}".
-function getSelectedRoundIndices() {
-  var roundSet = {};
-  var keys = Object.keys(state.selectedBlocks);
-  for (var i = 0; i < keys.length; i++) {
-    if (!state.selectedBlocks[keys[i]]) continue;
-    var parts = keys[i].split('-');
-    if (parts.length >= 3) {
-      var roundIdx = parseInt(parts[1], 10);
-      if (!isNaN(roundIdx) && state.transcript && state.transcript.rounds[roundIdx]) {
-        roundSet[state.transcript.rounds[roundIdx].index] = true;
-      }
-    }
-  }
-  var result = [];
-  var rkeys = Object.keys(roundSet);
-  for (var j = 0; j < rkeys.length; j++) {
-    result.push(parseInt(rkeys[j], 10));
-  }
-  result.sort(function(a, b) { return a - b; });
-  return result;
-}
-
-// Build a map of round index -> list of selected block roles.
+// Build a list of [roundIdx, blockIdx] pairs from selected blocks.
 // Returns null if no blocks are selected.
-// Block roles are determined by matching blockIdx to the round's block structure
-// (same order as renderRound): user/context, tool, thinking, claude.
-function getSelectedBlocksByRound() {
+function getSelectedBlocks() {
   var keys = Object.keys(state.selectedBlocks);
-  var hasSelection = false;
-  // Collect selected blockIdx per roundIdx.
-  var selected = {}; // roundIdx -> [blockIdx, ...]
+  var result = [];
   for (var i = 0; i < keys.length; i++) {
     if (!state.selectedBlocks[keys[i]]) continue;
     var parts = keys[i].split('-');
@@ -347,48 +395,10 @@ function getSelectedBlocksByRound() {
     var roundIdx = parseInt(parts[1], 10);
     var blockIdx = parseInt(parts[2], 10);
     if (isNaN(roundIdx) || isNaN(blockIdx)) continue;
-    if (!state.transcript || !state.transcript.rounds[roundIdx]) continue;
-    if (!selected[roundIdx]) selected[roundIdx] = [];
-    selected[roundIdx].push(blockIdx);
-    hasSelection = true;
+    result.push([roundIdx, blockIdx]);
   }
-  if (!hasSelection) return null;
-
-  // Map blockIdx to role name using the same logic as renderRound.
-  var result = {};
-  var roundIdxKeys = Object.keys(selected);
-  for (var j = 0; j < roundIdxKeys.length; j++) {
-    var ri = parseInt(roundIdxKeys[j], 10);
-    var round = state.transcript.rounds[ri];
-    // Build ordered role list matching renderRound block order.
-    var roles = [];
-    if (round.user_html) {
-      roles.push(round.is_context ? 'context' : 'you');
-    }
-    if (round.tool_calls && round.tool_calls.length > 0) {
-      roles.push('tool');
-    }
-    if (round.thinking_html) {
-      roles.push('thinking');
-    }
-    if (round.assistant_html) {
-      roles.push('claude');
-    }
-    // Map selected blockIdx values to role names.
-    var roundRoles = [];
-    var blockIndices = selected[ri];
-    for (var k = 0; k < blockIndices.length; k++) {
-      var bi = blockIndices[k];
-      if (bi < roles.length) {
-        roundRoles.push(roles[bi]);
-      }
-    }
-    if (roundRoles.length > 0) {
-      // Key by the round's original index (from transcript data).
-      result[String(round.index)] = roundRoles;
-    }
-  }
-  return result;
+  result.sort(function(a, b) { return a[0] !== b[0] ? a[0] - b[0] : a[1] - b[1]; });
+  return result.length > 0 ? result : null;
 }
 
 // --- Selection actions ---
@@ -471,6 +481,7 @@ document.getElementById('filter-input').addEventListener('input', function() {
   if (state.filteredSessions.length > 0) {
     loadTranscript(0);
   } else {
+    stopPolling();
     state.currentSession = null;
     state.transcript = null;
     state.selectedBlocks = {};

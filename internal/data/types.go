@@ -12,16 +12,21 @@ type SessionSummary struct {
 	MessageCount int
 }
 
+// Block represents a single visible block within a round.
+// Blocks are stored in file order (chronological).
+type Block struct {
+	Role     string    // "you", "context", "tool", "thinking", "claude"
+	Text     string    // raw text content (empty for tool blocks)
+	ToolCall *ToolCall // non-nil for tool blocks only
+}
+
 // Round represents one user turn and the assistant response(s) that follow.
 type Round struct {
-	Index          int
-	UserMessage    string
-	UserTimestamp  string
-	IsContext      bool // true if UserMessage is system-injected context, not user input
-	AssistantTexts []string
-	ThinkingTexts  []string
-	ToolCalls      []ToolCall
-	Usage          Usage // aggregated across all assistant entries in this round
+	Index         int
+	UserTimestamp string
+	IsContext     bool // true if user message is system-injected context
+	Blocks        []Block
+	Usage         Usage // aggregated across all assistant entries in this round
 }
 
 // ToolCall represents a single tool invocation within a round.
@@ -44,30 +49,13 @@ type Transcript struct {
 	Rounds    []Round
 }
 
-// ExportRound is the JSON structure written per line in export files.
-type ExportRound struct {
-	SessionID         string       `json:"session_id"`
-	Timestamp         string       `json:"timestamp"`
-	Project           string       `json:"project"`
-	RoundIndex        int          `json:"round_index"`
-	IsContext         bool         `json:"is_context"`
-	UserMessage       string       `json:"user_message"`
-	ToolCalls         []ExportTool `json:"tool_calls"`
-	AssistantResponse string       `json:"assistant_response"`
-	ThinkingTexts     []string     `json:"thinking_texts,omitempty"`
-	Usage             ExportUsage  `json:"usage"`
-}
-
-// ExportTool is the tool call representation in export files.
-type ExportTool struct {
-	Name         string `json:"name"`
-	InputSummary string `json:"input_summary"`
-}
-
-// ExportUsage is the usage representation in export files.
-type ExportUsage struct {
-	InputTokens   int64 `json:"input_tokens"`
-	OutputTokens  int64 `json:"output_tokens"`
-	CacheRead     int64 `json:"cache_read"`
-	CacheCreation int64 `json:"cache_creation"`
+// ExportBlock is the JSON structure written per line in JSONL export files.
+type ExportBlock struct {
+	SessionID    string `json:"session_id"`
+	RoundIndex   int    `json:"round_index"`
+	BlockIndex   int    `json:"block_index"`
+	Role         string `json:"role"`
+	Text         string `json:"text,omitempty"`
+	Name         string `json:"name,omitempty"`
+	InputSummary string `json:"input_summary,omitempty"`
 }

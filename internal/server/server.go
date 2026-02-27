@@ -64,20 +64,18 @@ type transcriptJSON struct {
 	Rounds    []roundJSON `json:"rounds"`
 }
 
-// roundJSON sends structured data per round.  The frontend owns layout.
 type roundJSON struct {
-	Index         int            `json:"index"`
-	UserTimestamp string         `json:"user_timestamp"`
-	IsContext     bool           `json:"is_context"`
-	UserHTML      string         `json:"user_html,omitempty"`
-	AssistantHTML string         `json:"assistant_html,omitempty"`
-	ThinkingHTML  string         `json:"thinking_html,omitempty"`
-	ToolCalls     []toolCallJSON `json:"tool_calls,omitempty"`
-	Usage         usageJSON      `json:"usage"`
+	Index         int         `json:"index"`
+	UserTimestamp string      `json:"user_timestamp"`
+	IsContext     bool        `json:"is_context"`
+	Blocks        []blockJSON `json:"blocks"`
+	Usage         usageJSON   `json:"usage"`
 }
 
-type toolCallJSON struct {
-	Name         string `json:"name"`
+type blockJSON struct {
+	Role         string `json:"role"`
+	HTML         string `json:"html,omitempty"`
+	Name         string `json:"name,omitempty"`
 	InputSummary string `json:"input_summary,omitempty"`
 }
 
@@ -89,10 +87,9 @@ type usageJSON struct {
 }
 
 type exportRequest struct {
-	SessionID       string              `json:"session_id"`
-	Format          string              `json:"format"`
-	RoundIndices    []int               `json:"round_indices,omitempty"`
-	BlockRoles      map[string][]string `json:"block_roles,omitempty"`
+	SessionID string  `json:"session_id"`
+	Format    string  `json:"format"`
+	Blocks    [][]int `json:"blocks,omitempty"`
 }
 
 // --- Handlers ---
@@ -131,12 +128,19 @@ func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request) {
 
 	rounds := make([]roundJSON, len(transcript.Rounds))
 	for i, rd := range transcript.Rounds {
-		// Tool calls as structured data.
-		var tools []toolCallJSON
-		if len(rd.ToolCalls) > 0 {
-			tools = make([]toolCallJSON, len(rd.ToolCalls))
-			for j, tc := range rd.ToolCalls {
-				tools[j] = toolCallJSON{Name: tc.Name, InputSummary: tc.InputSummary}
+		blocks := make([]blockJSON, len(rd.Blocks))
+		for j, b := range rd.Blocks {
+			if b.Role == "tool" && b.ToolCall != nil {
+				blocks[j] = blockJSON{
+					Role:         "tool",
+					Name:         b.ToolCall.Name,
+					InputSummary: b.ToolCall.InputSummary,
+				}
+			} else {
+				blocks[j] = blockJSON{
+					Role: b.Role,
+					HTML: renderMarkdown(b.Text),
+				}
 			}
 		}
 
@@ -144,10 +148,7 @@ func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request) {
 			Index:         rd.Index,
 			UserTimestamp:  rd.UserTimestamp,
 			IsContext:      rd.IsContext,
-			UserHTML:       renderMarkdown(rd.UserMessage),
-			AssistantHTML:  renderMarkdown(strings.Join(rd.AssistantTexts, "\n")),
-			ThinkingHTML:   renderMarkdown(strings.Join(rd.ThinkingTexts, "\n\n")),
-			ToolCalls:      tools,
+			Blocks:        blocks,
 			Usage: usageJSON{
 				InputTokens:   rd.Usage.InputTokens,
 				OutputTokens:  rd.Usage.OutputTokens,
@@ -194,19 +195,13 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var indices []int
-	if len(req.RoundIndices) > 0 {
-		indices = req.RoundIndices
-	}
-
-	// Convert block_roles from string keys to int keys.
-	var blockRoles map[int][]string
-	if len(req.BlockRoles) > 0 {
-		blockRoles = make(map[int][]string, len(req.BlockRoles))
-		for k, v := range req.BlockRoles {
-			var idx int
-			if _, err := fmt.Sscanf(k, "%d", &idx); err == nil {
-				blockRoles[idx] = v
+	// Convert request blocks from [][]int to [][2]int.
+	var blocks [][2]int
+	if len(req.Blocks) > 0 {
+		blocks = make([][2]int, 0, len(req.Blocks))
+		for _, pair := range req.Blocks {
+			if len(pair) == 2 {
+				blocks = append(blocks, [2]int{pair[0], pair[1]})
 			}
 		}
 	}
@@ -216,11 +211,11 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	var contentType string
 	switch req.Format {
 	case "md":
-		content = data.GenerateMarkdown(session, transcript, indices, blockRoles)
+		content = data.GenerateMarkdown(session, transcript, blocks)
 		filename = req.SessionID + ".md"
 		contentType = "text/markdown; charset=utf-8"
 	default:
-		content = data.GenerateJSONL(session, transcript, indices, blockRoles)
+		content = data.GenerateJSONL(session, transcript, blocks)
 		filename = req.SessionID + ".jsonl"
 		contentType = "application/x-ndjson"
 	}
@@ -233,7 +228,6 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 // --- Rendering ---
 
 // renderMarkdown converts a markdown string to HTML using the md2html pipeline.
-// Used to render content *within* a block, not the block structure itself.
 func renderMarkdown(text string) string {
 	if text == "" {
 		return ""
