@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/algonous/cc-viewer/internal/data"
 	"github.com/algonous/md2html/md2html"
@@ -13,14 +16,48 @@ import (
 
 // Server handles HTTP requests for the cc-viewer web UI.
 type Server struct {
-	claudeDir string
-	sessions  []data.SessionSummary
-	webFS     fs.FS
+	claudeDir   string
+	sessions    []data.SessionSummary
+	webFS       fs.FS
+	mu          sync.Mutex
+	lastRefresh time.Time
 }
 
 // New creates a new Server.
 func New(claudeDir string, sessions []data.SessionSummary, webFS fs.FS) *Server {
 	return &Server{claudeDir: claudeDir, sessions: sessions, webFS: webFS}
+}
+
+// refreshSessions re-reads history.jsonl and merges new or updated sessions.
+func (s *Server) refreshSessions() {
+	fresh, err := data.LoadHistoryQuick(s.claudeDir)
+	if err != nil {
+		return
+	}
+
+	existing := make(map[string]int, len(s.sessions))
+	for i, sess := range s.sessions {
+		existing[sess.SessionID] = i
+	}
+
+	changed := false
+	for _, sess := range fresh {
+		if idx, ok := existing[sess.SessionID]; ok {
+			if sess.LastTS > s.sessions[idx].LastTS {
+				s.sessions[idx].LastTS = sess.LastTS
+				changed = true
+			}
+		} else {
+			s.sessions = append(s.sessions, sess)
+			changed = true
+		}
+	}
+
+	if changed {
+		sort.Slice(s.sessions, func(i, j int) bool {
+			return s.sessions[i].LastTS > s.sessions[j].LastTS
+		})
+	}
 }
 
 // Handler returns the HTTP handler with all routes registered.
@@ -95,6 +132,11 @@ type exportRequest struct {
 // --- Handlers ---
 
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	if time.Since(s.lastRefresh) > 5*time.Second {
+		s.refreshSessions()
+		s.lastRefresh = time.Now()
+	}
 	result := make([]sessionJSON, len(s.sessions))
 	for i, sess := range s.sessions {
 		result[i] = sessionJSON{
@@ -108,6 +150,7 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 			MessageCount: sess.MessageCount,
 		}
 	}
+	s.mu.Unlock()
 	writeJSON(w, result)
 }
 
@@ -169,6 +212,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Find session.
+	s.mu.Lock()
 	var session data.SessionSummary
 	found := false
 	for _, sess := range s.sessions {
@@ -178,6 +222,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	s.mu.Unlock()
 	if !found {
 		http.Error(w, "session not found", http.StatusNotFound)
 		return

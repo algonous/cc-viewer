@@ -863,6 +863,32 @@ function loadSessions() {
     if (state.filteredSessions.length > 0) {
       loadTranscript(targetIdx);
     }
+
+    // Start polling for new sessions.
+    setInterval(refreshSessionList, 5000);
+  });
+}
+
+function refreshSessionList() {
+  fetchJSON('/api/sessions').then(function(data) {
+    if (!data) return;
+    state.sessions = data;
+    applyFilter();
+
+    // Re-find current session index after potential re-sort.
+    if (state.currentSession) {
+      var sid = state.currentSession.session_id;
+      state.sidebarIdx = -1;
+      for (var i = 0; i < state.filteredSessions.length; i++) {
+        if (state.filteredSessions[i].session_id === sid) {
+          state.sidebarIdx = i;
+          break;
+        }
+      }
+    }
+
+    renderSidebar();
+    renderStatusBar();
   });
 }
 

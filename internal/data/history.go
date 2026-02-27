@@ -378,6 +378,62 @@ func projectName(project string) string {
 	return filepath.Base(strings.TrimRight(project, "/"))
 }
 
+// LoadHistoryQuick reads only history.jsonl and returns session summaries
+// without orphan discovery or transcript text indexing.
+// Used for live refresh of the session list.
+func LoadHistoryQuick(claudeDir string) ([]SessionSummary, error) {
+	groups := make(map[string]*SessionSummary)
+
+	path := filepath.Join(claudeDir, "history.jsonl")
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	for scanner.Scan() {
+		var e historyEntry
+		if err := json.Unmarshal(scanner.Bytes(), &e); err != nil {
+			continue
+		}
+		if e.SessionID == "" {
+			continue
+		}
+
+		s, ok := groups[e.SessionID]
+		if !ok {
+			s = &SessionSummary{
+				SessionID:    e.SessionID,
+				Project:      e.Project,
+				ProjectName:  projectName(e.Project),
+				FirstMessage: e.Display,
+				FirstTS:      e.Timestamp,
+				LastTS:       e.Timestamp,
+			}
+			groups[e.SessionID] = s
+		}
+		s.MessageCount++
+		if e.Timestamp < s.FirstTS {
+			s.FirstTS = e.Timestamp
+			s.FirstMessage = e.Display
+		}
+		if e.Timestamp > s.LastTS {
+			s.LastTS = e.Timestamp
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	result := make([]SessionSummary, 0, len(groups))
+	for _, s := range groups {
+		result = append(result, *s)
+	}
+	return result, nil
+}
+
 // FindTranscriptPath locates the transcript JSONL file for a given session.
 // It searches through all project directories under claudeDir/projects/.
 func FindTranscriptPath(claudeDir string, sessionID string) (string, error) {
