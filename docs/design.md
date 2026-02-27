@@ -214,3 +214,21 @@ Color palette (matches [md2html](https://github.com/algonous/md2html)):
 | THINKING | `#9ca3af` | `#f9fafb`  | `#4b5563` |
 
 Page background: `#f5f5f3`. Code blocks: `#f6f8fa` bg, `#e1e4e8` border.
+
+### Client-side rendering features
+
+**Round fold**: Each round header includes a fold arrow. Clicking the round header collapses or expands the round body (all blocks within that round). Default is open. When folded, a summary appears in the header showing the first block's text (~80 chars) plus the total block count (e.g. "Fix the login bug... (5 blocks)").
+
+**Consecutive block grouping**: Runs of 2+ consecutive blocks with the same role are wrapped in a collapsible `block-group` container. The group header shows a fold arrow, the role label, the count, and a fold summary. Group fold defaults match block fold defaults: TOOL/THINKING/CONTEXT groups start folded, YOU/CLAUDE groups start open. Each inner block retains its own individual fold. Group fold summary for tool groups lists unique tool names (e.g. "Read, Edit, Bash"); for other roles it shows "N blocks". Runs of 1 block are rendered directly without a group wrapper.
+
+Grouping algorithm: iterate blocks in order, extending the current run when the role matches, otherwise starting a new run:
+
+```
+[you, thinking, claude, tool, tool, tool, claude]
+-> [{role:"you", count:1}, {role:"thinking", count:1}, {role:"claude", count:1},
+    {role:"tool", count:3}, {role:"claude", count:1}]
+```
+
+**Round sort toggle**: A toolbar button ("Oldest first" / "Newest first") toggles round display order between ascending (chronological) and descending (newest first). State is kept in `state.roundOrder` ('asc' or 'desc'). Rendering builds an index array and reverses it for desc order. The original round index is preserved for block IDs and anchor links. During polling, new rounds are inserted at the top when desc, at the bottom when asc.
+
+**Hover anchor permalinks**: A `#` icon appears on hover to the right of round headers and block role labels. Clicking it copies the permalink URL to clipboard and shows a status message. Click events stop propagation to prevent fold toggling. URL format follows the routing spec: `/<sessionId>/<roundIdx>` for rounds, `/<sessionId>/<roundIdx>/<blockIdx>` for blocks.

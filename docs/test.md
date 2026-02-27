@@ -100,3 +100,32 @@ Fixtures contain minimal but representative data: a session with user messages, 
 - File download (export button triggering browser download)
 
 These require manual verification or a headless browser, which is outside the current scope.
+
+### Client-side rendering features (manual verification)
+
+**Round fold**:
+- Click round header -> round body collapses, fold arrow rotates back
+- Click again -> round body expands, fold arrow rotates to 90deg
+- When folded, summary shows first block text (~80 chars) + "(N blocks)"
+- Checkbox clicks inside blocks do NOT trigger round fold
+
+**Block grouping**:
+- Find a session with consecutive same-role blocks (e.g. 3 tool calls in a row)
+- Consecutive blocks are wrapped in a group with role label and count
+- Group fold arrow toggles all inner blocks' visibility
+- Inner blocks retain their own individual fold toggles
+- Tool group summary lists unique tool names; other groups show "N blocks"
+- Single-block runs are NOT wrapped in a group
+
+**Sort toggle**:
+- Click "Oldest first" button -> rounds reverse to newest-first, button reads "Newest first"
+- Click again -> rounds restore to oldest-first
+- Polling still appends new rounds correctly in both orders
+- Block selection and export still work after toggling
+
+**Anchor links**:
+- Hover over round header -> `#` icon appears
+- Hover over block header -> `#` icon appears
+- Click `#` -> permalink URL copied to clipboard, status message shown
+- Click `#` does NOT trigger fold toggle
+- URL format: `/<sessionId>/<roundIdx>` for rounds, `/<sessionId>/<roundIdx>/<blockIdx>` for blocks

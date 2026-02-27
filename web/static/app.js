@@ -9,6 +9,7 @@ var state = {
   selectedBlocks: {},
   filterText: '',
   exportFormat: 'jsonl',
+  roundOrder: 'asc',
 };
 
 // Blocks that start folded by default.
@@ -35,13 +36,21 @@ function loadTranscript(idx) {
   renderSidebar();
 
   var sid = state.currentSession.session_id;
-  history.replaceState(null, '', '/' + sid);
+  if (state._initialRoundIdx === undefined) {
+    history.replaceState(null, '', '/' + sid);
+  }
   fetchJSON('/api/transcript/' + sid).then(function(data) {
     state.transcript = data;
     renderViewer();
     updateSelectionUI();
     renderStatusBar();
     startPolling(sid);
+
+    if (state._initialRoundIdx !== undefined) {
+      scrollToTarget(state._initialRoundIdx, state._initialBlockIdx);
+      delete state._initialRoundIdx;
+      delete state._initialBlockIdx;
+    }
   });
 }
 
@@ -87,10 +96,14 @@ function startPolling(sid) {
           state.transcript.rounds.push(data.rounds[i]);
           html += renderRound(data.rounds[i], i);
         }
-        content.insertAdjacentHTML('beforeend', html);
-        var newRoundEls = content.querySelectorAll('.round');
-        for (var j = oldLen; j < newRoundEls.length; j++) {
-          initBlocks(newRoundEls[j]);
+        if (state.roundOrder === 'desc') {
+          content.insertAdjacentHTML('afterbegin', html);
+        } else {
+          content.insertAdjacentHTML('beforeend', html);
+        }
+        for (var j = oldLen; j < newLen; j++) {
+          var el = content.querySelector('.round[data-round-idx="' + j + '"]');
+          if (el) initBlocks(el);
         }
         changed = true;
       }
@@ -120,6 +133,7 @@ function roundChanged(oldR, newR) {
 
 // Initialize fold summaries and toggle handlers for blocks within a container element.
 function initBlocks(container) {
+  // Block fold summaries + handlers.
   var blocks = container.querySelectorAll('.chat-block');
   for (var i = 0; i < blocks.length; i++) {
     var block = blocks[i];
@@ -141,6 +155,56 @@ function initBlocks(container) {
     var header = block.querySelector('.block-header');
     if (header) header.addEventListener('click', foldToggleHandler);
   }
+
+  // Group fold summaries + handlers.
+  var groups = container.querySelectorAll('.block-group');
+  for (var gi = 0; gi < groups.length; gi++) {
+    var group = groups[gi];
+    var gSummary = group.querySelector('.group-header .fold-summary');
+    if (gSummary) {
+      var gBody = group.querySelector('.group-body');
+      if (gBody) {
+        var gText = '';
+        if (group.classList.contains('block-group-tool')) {
+          var names = gBody.querySelectorAll('.tool-name');
+          var nameList = [];
+          for (var ni = 0; ni < names.length; ni++) {
+            var n = names[ni].textContent;
+            if (n && nameList.indexOf(n) < 0) nameList.push(n);
+          }
+          gText = nameList.join(', ');
+        } else {
+          var cnt = group.querySelector('.group-count');
+          gText = (cnt ? cnt.textContent.replace(/[()]/g, '') : '') + ' blocks';
+        }
+        gSummary.textContent = gText;
+      }
+    }
+    var gh = group.querySelector('.group-header');
+    if (gh) gh.addEventListener('click', groupFoldToggleHandler);
+  }
+
+  // Round fold summary + handler.
+  var rfSummary = container.querySelector('.round-fold-summary');
+  if (rfSummary) {
+    var rBody = container.querySelector('.round-body');
+    if (rBody) {
+      var firstBlock = rBody.querySelector('.chat-block');
+      var rText = '';
+      if (firstBlock) {
+        var fb = firstBlock.querySelector('.fold-body');
+        if (fb) {
+          rText = (fb.textContent || '').trim().replace(/\s+/g, ' ');
+          rText = truncate(rText, 80);
+        }
+      }
+      var bc = rBody.querySelectorAll('.chat-block').length;
+      rText += ' (' + bc + ' block' + (bc !== 1 ? 's' : '') + ')';
+      rfSummary.textContent = rText;
+    }
+  }
+  var rh = container.querySelector('.round-header');
+  if (rh) rh.addEventListener('click', roundFoldToggleHandler);
 }
 
 function doExport() {
@@ -232,21 +296,48 @@ function renderViewer() {
   var s = state.currentSession;
   title.textContent = (s ? s.project_name + ' -- ' : '') + rounds.length + ' rounds';
 
+  var order = [];
+  for (var i = 0; i < rounds.length; i++) order.push(i);
+  if (state.roundOrder === 'desc') order.reverse();
+
   var html = '';
-  for (var i = 0; i < rounds.length; i++) {
-    html += renderRound(rounds[i], i);
+  for (var j = 0; j < order.length; j++) {
+    html += renderRound(rounds[order[j]], order[j]);
   }
   content.innerHTML = html;
 
-  // Fill fold summaries from rendered content, then attach toggle handlers.
+  // Fill fold summaries and attach toggle handlers.
   fillFoldSummaries();
-  var headers = content.querySelectorAll('.block-header');
-  for (var j = 0; j < headers.length; j++) {
-    headers[j].addEventListener('click', foldToggleHandler);
+  var blockHeaders = content.querySelectorAll('.block-header');
+  for (var k = 0; k < blockHeaders.length; k++) {
+    blockHeaders[k].addEventListener('click', foldToggleHandler);
+  }
+  var groupHeaders = content.querySelectorAll('.group-header');
+  for (var k2 = 0; k2 < groupHeaders.length; k2++) {
+    groupHeaders[k2].addEventListener('click', groupFoldToggleHandler);
+  }
+  var roundHeaders = content.querySelectorAll('.round-header');
+  for (var k3 = 0; k3 < roundHeaders.length; k3++) {
+    roundHeaders[k3].addEventListener('click', roundFoldToggleHandler);
   }
 }
 
+// Build HTML content for a single block (tool or markdown).
+function buildBlockContent(b) {
+  if (b.role === 'tool') {
+    var html = '<div class="tool-list"><div class="tool-item">' +
+      '<span class="tool-name">' + escapeHtml(b.name || '') + '</span>';
+    if (b.input_summary) {
+      html += '<span class="tool-input">' + escapeHtml(b.input_summary) + '</span>';
+    }
+    html += '</div></div>';
+    return html;
+  }
+  return b.html || '';
+}
+
 function renderRound(round, idx) {
+  var sid = state.currentSession ? state.currentSession.session_id : '';
   var ts = formatShortTime(round.user_timestamp || '');
   var tokens = '';
   if (round.usage) {
@@ -261,35 +352,56 @@ function renderRound(round, idx) {
 
   var html = '<div class="round" data-round-idx="' + idx + '">' +
     '<div class="round-header">' +
+    '<span class="fold-arrow open">&#9654;</span>' +
     '<span class="round-index">#' + (round.index + 1) + '</span>' +
     '<span class="round-timestamp">' + escapeHtml(ts) + '</span>' +
+    '<a class="anchor-link" data-anchor="/' + sid + '/' + idx + '" title="Copy link">#</a>' +
+    '<span class="round-fold-summary"></span>' +
     tokens +
     '</div>';
 
-  // Render blocks in file order.
+  // Group consecutive same-role blocks.
   var blocks = round.blocks || [];
+  var groups = [];
   for (var i = 0; i < blocks.length; i++) {
-    var b = blocks[i];
-    var contentHtml;
-    if (b.role === 'tool') {
-      contentHtml = '<div class="tool-list"><div class="tool-item">' +
-        '<span class="tool-name">' + escapeHtml(b.name || '') + '</span>';
-      if (b.input_summary) {
-        contentHtml += '<span class="tool-input">' + escapeHtml(b.input_summary) + '</span>';
-      }
-      contentHtml += '</div></div>';
+    if (groups.length > 0 && groups[groups.length - 1].role === blocks[i].role) {
+      groups[groups.length - 1].indices.push(i);
     } else {
-      contentHtml = b.html || '';
+      groups.push({role: blocks[i].role, indices: [i]});
     }
-    html += renderBlock(idx, i, b.role, contentHtml);
   }
 
-  html += '</div>';
+  html += '<div class="round-body open">';
+
+  for (var g = 0; g < groups.length; g++) {
+    var group = groups[g];
+    if (group.indices.length === 1) {
+      var bi = group.indices[0];
+      html += renderBlock(idx, bi, blocks[bi].role, buildBlockContent(blocks[bi]), sid);
+    } else {
+      var startOpen = !FOLD_CLOSED[group.role];
+      html += '<div class="block-group block-group-' + group.role + '">' +
+        '<div class="group-header">' +
+        '<span class="fold-arrow' + (startOpen ? ' open' : '') + '">&#9654;</span>' +
+        '<span class="chat-role">' + group.role.toUpperCase() + '</span>' +
+        '<span class="group-count">(' + group.indices.length + ')</span>' +
+        '<span class="fold-summary"></span>' +
+        '</div>' +
+        '<div class="group-body' + (startOpen ? ' open' : '') + '">';
+      for (var k = 0; k < group.indices.length; k++) {
+        var bi2 = group.indices[k];
+        html += renderBlock(idx, bi2, blocks[bi2].role, buildBlockContent(blocks[bi2]), sid);
+      }
+      html += '</div></div>';
+    }
+  }
+
+  html += '</div></div>';
   return html;
 }
 
 // Render a single chat block with fold toggle and checkbox.
-function renderBlock(roundIdx, blockIdx, role, contentHtml) {
+function renderBlock(roundIdx, blockIdx, role, contentHtml, sid) {
   var blockId = 'b-' + roundIdx + '-' + blockIdx;
   var roleLabel = role.toUpperCase();
   var startOpen = !FOLD_CLOSED[role];
@@ -298,11 +410,12 @@ function renderBlock(roundIdx, blockIdx, role, contentHtml) {
 
   var html = '<div class="chat-block chat-' + role + checkedClass + '" data-block-id="' + blockId + '">';
 
-  // Header row: checkbox + fold arrow + role label + summary.
+  // Header row: checkbox + fold arrow + role label + anchor link + summary.
   html += '<div class="block-header">' +
     '<input type="checkbox" class="block-checkbox" data-block-id="' + blockId + '"' + checked + '>' +
     '<span class="fold-arrow' + (startOpen ? ' open' : '') + '">&#9654;</span>' +
     '<span class="chat-role">' + roleLabel + '</span>' +
+    '<a class="anchor-link" data-anchor="/' + sid + '/' + roundIdx + '/' + blockIdx + '" title="Copy link">#</a>' +
     '<span class="fold-summary"></span>' +
     '</div>';
 
@@ -315,6 +428,7 @@ function renderBlock(roundIdx, blockIdx, role, contentHtml) {
 
 // After innerHTML is set, fill in fold summaries from rendered content.
 function fillFoldSummaries() {
+  // Block fold summaries.
   var blocks = document.querySelectorAll('#viewer-content .chat-block');
   for (var i = 0; i < blocks.length; i++) {
     var block = blocks[i];
@@ -336,15 +450,84 @@ function fillFoldSummaries() {
     }
     summaryEl.textContent = text;
   }
+
+  // Group fold summaries.
+  var groups = document.querySelectorAll('#viewer-content .block-group');
+  for (var gi = 0; gi < groups.length; gi++) {
+    var group = groups[gi];
+    var gSummary = group.querySelector('.group-header .fold-summary');
+    if (!gSummary) continue;
+    var gBody = group.querySelector('.group-body');
+    if (!gBody) continue;
+
+    var gText = '';
+    if (group.classList.contains('block-group-tool')) {
+      var names = gBody.querySelectorAll('.tool-name');
+      var nameList = [];
+      for (var ni = 0; ni < names.length; ni++) {
+        var n = names[ni].textContent;
+        if (n && nameList.indexOf(n) < 0) nameList.push(n);
+      }
+      gText = nameList.join(', ');
+    } else {
+      var cnt = group.querySelector('.group-count');
+      gText = (cnt ? cnt.textContent.replace(/[()]/g, '') : '') + ' blocks';
+    }
+    gSummary.textContent = gText;
+  }
+
+  // Round fold summaries.
+  var rounds = document.querySelectorAll('#viewer-content .round');
+  for (var ri = 0; ri < rounds.length; ri++) {
+    var round = rounds[ri];
+    var rfSummary = round.querySelector('.round-fold-summary');
+    if (!rfSummary) continue;
+    var rBody = round.querySelector('.round-body');
+    if (!rBody) continue;
+
+    var firstBlock = rBody.querySelector('.chat-block');
+    var rText = '';
+    if (firstBlock) {
+      var fb = firstBlock.querySelector('.fold-body');
+      if (fb) {
+        rText = (fb.textContent || '').trim().replace(/\s+/g, ' ');
+        rText = truncate(rText, 80);
+      }
+    }
+    var bc = rBody.querySelectorAll('.chat-block').length;
+    rText += ' (' + bc + ' block' + (bc !== 1 ? 's' : '') + ')';
+    rfSummary.textContent = rText;
+  }
 }
 
 function foldToggleHandler(e) {
-  // Don't toggle fold when clicking the checkbox.
+  // Don't toggle fold when clicking the checkbox or anchor link.
   if (e.target.classList.contains('block-checkbox')) return;
+  if (e.target.closest('.anchor-link')) return;
   var block = this.closest('.chat-block');
   if (!block) return;
   var body = block.querySelector('.fold-body');
   var arrow = block.querySelector('.fold-arrow');
+  if (body) body.classList.toggle('open');
+  if (arrow) arrow.classList.toggle('open');
+}
+
+function roundFoldToggleHandler(e) {
+  if (e.target.closest('.anchor-link')) return;
+  var round = this.closest('.round');
+  if (!round) return;
+  var body = round.querySelector('.round-body');
+  var arrow = this.querySelector('.fold-arrow');
+  if (body) body.classList.toggle('open');
+  if (arrow) arrow.classList.toggle('open');
+}
+
+function groupFoldToggleHandler(e) {
+  if (e.target.closest('.anchor-link')) return;
+  var group = this.closest('.block-group');
+  if (!group) return;
+  var body = group.querySelector('.group-body');
+  var arrow = this.querySelector('.fold-arrow');
   if (body) body.classList.toggle('open');
   if (arrow) arrow.classList.toggle('open');
 }
@@ -512,16 +695,34 @@ document.getElementById('viewer-content').addEventListener('change', function(e)
   }
 });
 
-// Export button.
-document.getElementById('btn-export').addEventListener('click', function() {
-  if (state.currentSession) openExportModal();
+// Anchor link click (delegated).
+document.getElementById('viewer-content').addEventListener('click', function(e) {
+  var anchor = e.target.closest('.anchor-link');
+  if (!anchor) return;
+  e.preventDefault();
+  e.stopPropagation();
+  var path = anchor.getAttribute('data-anchor');
+  var url = window.location.origin + path;
+  history.replaceState(null, '', path);
+  navigator.clipboard.writeText(url).then(function() { setStatus('Copied: ' + path); });
 });
+
+// Export button.
+document.getElementById('btn-export').addEventListener('click', openExportModal);
 
 // Dump button.
 document.getElementById('btn-dump').addEventListener('click', dumpSelected);
 
 // Clear button.
 document.getElementById('btn-clear').addEventListener('click', clearAllSelections);
+
+// Sort toggle.
+document.getElementById('btn-sort').addEventListener('click', function() {
+  state.roundOrder = state.roundOrder === 'asc' ? 'desc' : 'asc';
+  this.textContent = state.roundOrder === 'asc' ? 'Oldest first' : 'Newest first';
+  renderViewer();
+  updateSelectionUI();
+});
 
 // Export modal buttons.
 var formatBtns = document.querySelectorAll('.modal-options .modal-btn');
@@ -586,9 +787,60 @@ function escapeHtml(str) {
 
 function initFromURL() {
   var path = window.location.pathname;
-  if (path.length > 1) {
-    state._initialSessionID = path.substring(1);
+  if (path.length <= 1) return;
+  var parts = path.substring(1).split('/');
+  if (parts.length >= 1 && parts[0]) {
+    state._initialSessionID = parts[0];
   }
+  if (parts.length >= 2 && parts[1] !== '') {
+    var ri = parseInt(parts[1], 10);
+    if (!isNaN(ri)) state._initialRoundIdx = ri;
+  }
+  if (parts.length >= 3 && parts[2] !== '') {
+    var bi = parseInt(parts[2], 10);
+    if (!isNaN(bi)) state._initialBlockIdx = bi;
+  }
+}
+
+function scrollToTarget(roundIdx, blockIdx) {
+  var roundEl = document.querySelector('.round[data-round-idx="' + roundIdx + '"]');
+  if (!roundEl) return;
+
+  // Ensure round is open.
+  var roundBody = roundEl.querySelector('.round-body');
+  if (roundBody && !roundBody.classList.contains('open')) {
+    roundBody.classList.add('open');
+    var ra = roundEl.querySelector('.round-header > .fold-arrow');
+    if (ra) ra.classList.add('open');
+  }
+
+  var target = roundEl;
+
+  if (blockIdx !== undefined) {
+    var blockEl = roundEl.querySelector('[data-block-id="b-' + roundIdx + '-' + blockIdx + '"]');
+    if (blockEl) {
+      // Ensure containing group is open.
+      var group = blockEl.closest('.block-group');
+      if (group) {
+        var gb = group.querySelector('.group-body');
+        if (gb && !gb.classList.contains('open')) {
+          gb.classList.add('open');
+          var ga = group.querySelector('.group-header > .fold-arrow');
+          if (ga) ga.classList.add('open');
+        }
+      }
+      // Ensure block itself is open.
+      var fb = blockEl.querySelector('.fold-body');
+      if (fb && !fb.classList.contains('open')) {
+        fb.classList.add('open');
+        var ba = blockEl.querySelector('.fold-arrow');
+        if (ba) ba.classList.add('open');
+      }
+      target = blockEl;
+    }
+  }
+
+  target.scrollIntoView({block: 'start'});
 }
 
 function loadSessions() {
