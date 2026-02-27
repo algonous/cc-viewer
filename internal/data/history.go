@@ -2,11 +2,14 @@ package data
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -87,6 +90,9 @@ func LoadSessions(claudeDir string) ([]SessionSummary, error) {
 
 	// Phase 2: Scan transcript files for orphaned sessions not in history.jsonl.
 	discoverOrphanSessions(claudeDir, groups, messages, &order)
+
+	// Phase 3: Extract all user + assistant text from transcripts for full-text search.
+	indexTranscriptText(claudeDir, groups, messages)
 
 	result := make([]SessionSummary, 0, len(groups))
 	for _, id := range order {
@@ -215,6 +221,141 @@ func orphanSessionFromTranscript(path string, sid string, encodedProject string)
 		s.FirstTS = s.LastTS
 	}
 	return s
+}
+
+// indexTranscriptText scans all transcript files and extracts user + assistant
+// text for full-text search. This adds to the existing messages map so that
+// the filter can find text in Claude's responses, not just user input.
+type indexResult struct {
+	sid   string
+	texts []string
+}
+
+func indexTranscriptText(claudeDir string, groups map[string]*SessionSummary, messages map[string][]string) {
+	projectsDir := filepath.Join(claudeDir, "projects")
+	projEntries, err := os.ReadDir(projectsDir)
+	if err != nil {
+		return
+	}
+
+	// Collect all files to process.
+	type fileJob struct {
+		sid  string
+		path string
+	}
+	var jobs []fileJob
+
+	for _, projEntry := range projEntries {
+		if !projEntry.IsDir() {
+			continue
+		}
+		projPath := filepath.Join(projectsDir, projEntry.Name())
+		files, err := os.ReadDir(projPath)
+		if err != nil {
+			continue
+		}
+		for _, file := range files {
+			name := file.Name()
+			if file.IsDir() || !strings.HasSuffix(name, ".jsonl") || strings.HasPrefix(name, "agent-") {
+				continue
+			}
+			sid := strings.TrimSuffix(name, ".jsonl")
+			if _, ok := groups[sid]; !ok {
+				continue
+			}
+			jobs = append(jobs, fileJob{sid: sid, path: filepath.Join(projPath, name)})
+		}
+	}
+
+	// Process files concurrently.
+	results := make(chan indexResult, len(jobs))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, runtime.NumCPU())
+
+	for _, job := range jobs {
+		wg.Add(1)
+		go func(j fileJob) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			texts := extractTranscriptTexts(j.path)
+			if len(texts) > 0 {
+				results <- indexResult{sid: j.sid, texts: texts}
+			}
+		}(job)
+	}
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	for r := range results {
+		messages[r.sid] = append(messages[r.sid], r.texts...)
+	}
+}
+
+// extractTranscriptTexts reads a transcript file and returns all user messages
+// and assistant response texts for search indexing.
+// Uses selective JSON parsing: only fully parses user/assistant lines.
+func extractTranscriptTexts(path string) []string {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	var texts []string
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 4*1024*1024), 4*1024*1024)
+
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		// Fast pre-filter: skip lines that aren't user or assistant entries.
+		if !bytes.Contains(line, []byte(`"type":"user"`)) &&
+			!bytes.Contains(line, []byte(`"type":"assistant"`)) {
+			continue
+		}
+
+		var entry transcriptEntry
+		if json.Unmarshal(line, &entry) != nil || entry.Message == nil {
+			continue
+		}
+
+		switch entry.Type {
+		case "user":
+			var msg transcriptMessage
+			if json.Unmarshal(entry.Message, &msg) != nil {
+				continue
+			}
+			content := strings.TrimSpace(string(msg.Content))
+			if len(content) > 0 && content[0] == '"' {
+				var text string
+				if json.Unmarshal(msg.Content, &text) == nil && text != "" {
+					texts = append(texts, text)
+				}
+			}
+
+		case "assistant":
+			var msg transcriptMessage
+			if json.Unmarshal(entry.Message, &msg) != nil {
+				continue
+			}
+			content := strings.TrimSpace(string(msg.Content))
+			if len(content) > 0 && content[0] == '[' {
+				var blocks []contentBlock
+				if json.Unmarshal(msg.Content, &blocks) == nil {
+					for _, b := range blocks {
+						if b.Type == "text" && b.Text != "" {
+							texts = append(texts, b.Text)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return texts
 }
 
 // parseTimestamp parses an ISO 8601 timestamp string to unix milliseconds.
