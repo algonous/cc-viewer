@@ -93,7 +93,6 @@ type exportRequest struct {
 	Format          string              `json:"format"`
 	RoundIndices    []int               `json:"round_indices,omitempty"`
 	BlockRoles      map[string][]string `json:"block_roles,omitempty"`
-	IncludeThinking bool                `json:"include_thinking"`
 }
 
 // --- Handlers ---
@@ -217,11 +216,11 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	var contentType string
 	switch req.Format {
 	case "md":
-		content = data.GenerateMarkdown(session, transcript, indices, blockRoles, req.IncludeThinking)
+		content = data.GenerateMarkdown(session, transcript, indices, blockRoles)
 		filename = req.SessionID + ".md"
 		contentType = "text/markdown; charset=utf-8"
 	default:
-		content = data.GenerateJSONL(session, transcript, indices, blockRoles, req.IncludeThinking)
+		content = data.GenerateJSONL(session, transcript, indices, blockRoles)
 		filename = req.SessionID + ".jsonl"
 		contentType = "application/x-ndjson"
 	}

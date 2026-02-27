@@ -42,7 +42,6 @@ function doExport() {
   var body = {
     session_id: state.currentSession.session_id,
     format: state.exportFormat,
-    include_thinking: document.getElementById('export-thinking').checked,
   };
 
   // If blocks are selected, export only the selected block types per round.

@@ -11,11 +11,11 @@ import (
 // ExportSession writes a session transcript as structured JSONL to the export directory.
 // Returns the path of the written file.
 func ExportSession(configDir string, session SessionSummary, transcript *Transcript) (string, error) {
-	return ExportSessionRounds(configDir, session, transcript, nil, true)
+	return ExportSessionRounds(configDir, session, transcript, nil)
 }
 
 // ExportSessionRounds writes selected rounds as JSONL. If indices is nil, all rounds are exported.
-func ExportSessionRounds(configDir string, session SessionSummary, transcript *Transcript, indices []int, includeThinking bool) (string, error) {
+func ExportSessionRounds(configDir string, session SessionSummary, transcript *Transcript, indices []int) (string, error) {
 	exportDir := filepath.Join(configDir, "exports")
 	if err := os.MkdirAll(exportDir, 0755); err != nil {
 		return "", err
@@ -57,7 +57,7 @@ func ExportSessionRounds(configDir string, session SessionSummary, transcript *T
 				CacheCreation: r.Usage.CacheCreation,
 			},
 		}
-		if includeThinking && len(r.ThinkingTexts) > 0 {
+		if len(r.ThinkingTexts) > 0 {
 			er.ThinkingTexts = r.ThinkingTexts
 		}
 		if err := enc.Encode(er); err != nil {
@@ -70,7 +70,7 @@ func ExportSessionRounds(configDir string, session SessionSummary, transcript *T
 
 // ExportSessionMarkdown writes a session transcript as markdown.
 // Returns the path of the written file.
-func ExportSessionMarkdown(configDir string, session SessionSummary, transcript *Transcript, indices []int, includeThinking bool) (string, error) {
+func ExportSessionMarkdown(configDir string, session SessionSummary, transcript *Transcript, indices []int) (string, error) {
 	exportDir := filepath.Join(configDir, "exports")
 	if err := os.MkdirAll(exportDir, 0755); err != nil {
 		return "", err
@@ -83,7 +83,7 @@ func ExportSessionMarkdown(configDir string, session SessionSummary, transcript 
 	}
 	defer f.Close()
 
-	b := GenerateMarkdown(session, transcript, indices, nil, includeThinking)
+	b := GenerateMarkdown(session, transcript, indices, nil)
 	if _, err := f.Write(b); err != nil {
 		return "", err
 	}
@@ -93,7 +93,7 @@ func ExportSessionMarkdown(configDir string, session SessionSummary, transcript 
 
 // GenerateJSONL returns JSONL bytes for the given session/transcript.
 // When blockRoles is non-nil, it specifies which block types to include per round index.
-func GenerateJSONL(session SessionSummary, transcript *Transcript, indices []int, blockRoles map[int][]string, includeThinking bool) []byte {
+func GenerateJSONL(session SessionSummary, transcript *Transcript, indices []int, blockRoles map[int][]string) []byte {
 	var buf strings.Builder
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
@@ -125,7 +125,7 @@ func GenerateJSONL(session SessionSummary, transcript *Transcript, indices []int
 		if shouldIncludeRole(roles, "tool") {
 			er.ToolCalls = tools
 		}
-		if includeThinking && len(r.ThinkingTexts) > 0 && shouldIncludeRole(roles, "thinking") {
+		if len(r.ThinkingTexts) > 0 && shouldIncludeRole(roles, "thinking") {
 			er.ThinkingTexts = r.ThinkingTexts
 		}
 		if shouldIncludeRole(roles, "claude") {
@@ -138,7 +138,7 @@ func GenerateJSONL(session SessionSummary, transcript *Transcript, indices []int
 
 // GenerateMarkdown returns markdown bytes for the given session/transcript.
 // When blockRoles is non-nil, it specifies which block types to include per round index.
-func GenerateMarkdown(session SessionSummary, transcript *Transcript, indices []int, blockRoles map[int][]string, includeThinking bool) []byte {
+func GenerateMarkdown(session SessionSummary, transcript *Transcript, indices []int, blockRoles map[int][]string) []byte {
 	var buf strings.Builder
 	rounds := selectRoundsWithBlockRoles(transcript.Rounds, indices, blockRoles)
 
@@ -150,10 +150,14 @@ func GenerateMarkdown(session SessionSummary, transcript *Transcript, indices []
 		totalUsage.CacheRead += r.Usage.CacheRead
 	}
 
-	fmt.Fprintf(&buf, "# Session %s\n\n", session.SessionID)
-	fmt.Fprintf(&buf, "- **Rounds**: %d\n", len(rounds))
-	fmt.Fprintf(&buf, "- **Total tokens**: in=%d out=%d cache_read=%d cache_write=%d\n\n",
-		totalUsage.InputTokens, totalUsage.OutputTokens, totalUsage.CacheRead, totalUsage.CacheCreation)
+	fmt.Fprintf(&buf, "---\n")
+	fmt.Fprintf(&buf, "session: %s\n", session.SessionID)
+	fmt.Fprintf(&buf, "rounds: %d\n", len(rounds))
+	fmt.Fprintf(&buf, "total_tokens:\n")
+	fmt.Fprintf(&buf, "  in: %d\n", totalUsage.InputTokens)
+	fmt.Fprintf(&buf, "  out: %d\n", totalUsage.OutputTokens)
+	fmt.Fprintf(&buf, "  cache_read: %d\n", totalUsage.CacheRead)
+	fmt.Fprintf(&buf, "  cache_write: %d\n", totalUsage.CacheCreation)
 	fmt.Fprintf(&buf, "---\n\n")
 
 	for _, r := range rounds {
@@ -180,7 +184,7 @@ func GenerateMarkdown(session SessionSummary, transcript *Transcript, indices []
 			fmt.Fprintf(&buf, "```\n\n")
 		}
 
-		if includeThinking && len(r.ThinkingTexts) > 0 && shouldIncludeRole(roles, "thinking") {
+		if len(r.ThinkingTexts) > 0 && shouldIncludeRole(roles, "thinking") {
 			fmt.Fprintf(&buf, "```thinking\n%s\n```\n\n", strings.Join(r.ThinkingTexts, "\n\n"))
 		}
 
@@ -188,8 +192,6 @@ func GenerateMarkdown(session SessionSummary, transcript *Transcript, indices []
 			fmt.Fprintf(&buf, "```assistant\n%s\n```\n\n", strings.Join(r.AssistantTexts, "\n"))
 		}
 
-		fmt.Fprintf(&buf, "> Tokens: in=%d out=%d cache_read=%d cache_write=%d\n\n",
-			r.Usage.InputTokens, r.Usage.OutputTokens, r.Usage.CacheRead, r.Usage.CacheCreation)
 	}
 
 	return []byte(buf.String())

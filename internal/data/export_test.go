@@ -126,7 +126,7 @@ func TestExportSessionMarkdown(t *testing.T) {
 		},
 	}
 
-	outPath, err := ExportSessionMarkdown(configDir, session, transcript, nil, true)
+	outPath, err := ExportSessionMarkdown(configDir, session, transcript, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,14 +143,14 @@ func TestExportSessionMarkdown(t *testing.T) {
 	content := string(data)
 
 	checks := []string{
-		"# Session md-session",
-		"**Rounds**: 1",
+		"---\nsession: md-session\n",
+		"rounds: 1\n",
+		"total_tokens:\n  in: 3\n  out: 720\n  cache_read: 34582\n  cache_write: 1593\n---",
 		"## Round 1 (2026-02-26T19:02:00Z)",
 		"```prompt\nexplain this code\n```",
 		"```tool_use\nRead: /path/to/file.go\nBash: ls -la\n```",
 		"```thinking\nchain of thought here\n```",
 		"```assistant\nThis code does XYZ.\n```",
-		"> Tokens: in=3 out=720 cache_read=34582 cache_write=1593",
 	}
 	for _, check := range checks {
 		if !strings.Contains(content, check) {
@@ -158,42 +158,9 @@ func TestExportSessionMarkdown(t *testing.T) {
 		}
 	}
 
-	// Project line should NOT be present.
-	if strings.Contains(content, "**Project**") {
-		t.Error("markdown should not contain Project line")
-	}
-}
-
-func TestExportSessionMarkdownNoThinking(t *testing.T) {
-	configDir := t.TempDir()
-
-	session := SessionSummary{SessionID: "no-think", Project: "/foo"}
-	transcript := &Transcript{
-		SessionID: "no-think",
-		Rounds: []Round{
-			{
-				Index:          0,
-				UserMessage:    "hi",
-				UserTimestamp:   "2026-02-26T19:00:00Z",
-				AssistantTexts: []string{"hello"},
-				ThinkingTexts:  []string{"secret thoughts"},
-				Usage:          Usage{OutputTokens: 10},
-			},
-		},
-	}
-
-	outPath, err := ExportSessionMarkdown(configDir, session, transcript, nil, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	data, err := os.ReadFile(outPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if strings.Contains(string(data), "thinking") {
-		t.Error("markdown should not contain thinking when includeThinking=false")
+	// Per-round token lines should NOT be present.
+	if strings.Contains(content, "> Tokens:") {
+		t.Error("markdown should not contain per-round token lines")
 	}
 }
 
@@ -210,7 +177,7 @@ func TestExportSessionRoundsSubset(t *testing.T) {
 		},
 	}
 
-	outPath, err := ExportSessionRounds(configDir, session, transcript, []int{0, 2}, true)
+	outPath, err := ExportSessionRounds(configDir, session, transcript, []int{0, 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +235,7 @@ func TestGenerateMarkdownBlockRoles(t *testing.T) {
 		0: {"you", "claude"},
 		1: {"claude"},
 	}
-	content := string(GenerateMarkdown(session, transcript, nil, blockRoles, true))
+	content := string(GenerateMarkdown(session, transcript, nil, blockRoles))
 
 	// Round 0: prompt and assistant should be present.
 	if !strings.Contains(content, "```prompt\nhello\n```") {
@@ -312,7 +279,7 @@ func TestGenerateJSONLBlockRoles(t *testing.T) {
 
 	// Export only "claude" block.
 	blockRoles := map[int][]string{0: {"claude"}}
-	out := GenerateJSONL(session, transcript, nil, blockRoles, true)
+	out := GenerateJSONL(session, transcript, nil, blockRoles)
 
 	var er ExportRound
 	if err := json.Unmarshal(out[:len(out)-1], &er); err != nil {
