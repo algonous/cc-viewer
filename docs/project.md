@@ -7,14 +7,17 @@ A web-based application that browses Claude Code conversation history stored loc
 ## Features
 
 - Browse all Claude Code sessions with timestamps and project info
-- Distinguish live (still running) vs exited sessions
+- Sort sessions by most recent activity
 - View full transcripts organized by rounds; rounds ordered by time, blocks within each round ordered by time
 - Fold/unfold blocks (context, tool, thinking folded by default)
 - Token usage tracking per round (input, output, cache read, cache creation)
 - Select blocks with checkboxes, copy text to clipboard
 - Export sessions to JSONL or Markdown (downloads to browser)
 - Filter sessions by project or content
-- URL routing: `/<sessionId>` links directly to a session
+- Deep links:
+  - `/<sessionId>` opens a session
+  - `/<sessionId>/<roundIdx>` opens and scrolls to a round
+  - `/<sessionId>/<roundIdx>/<blockIdx>` opens and scrolls to a block
 
 ## Data Format (~/.claude/)
 
@@ -22,7 +25,7 @@ A web-based application that browses Claude Code conversation history stored loc
 
 ```
 ~/.claude/
-  history.jsonl                              # session index (one line per user message)
+  history.jsonl                              # session index (one line per session event)
   projects/
     -Users-frank-code-foo/                   # encoded project path (/ -> -)
       <sessionId>.jsonl                      # transcript for one session
@@ -33,26 +36,37 @@ A web-based application that browses Claude Code conversation history stored loc
 
 ### history.jsonl -- session index
 
-One JSON line per user message. Fields:
+One JSON line per session event. In current data this is primarily user-entered messages (including slash commands such as `/exit`).
+
+Fields:
 
 | Field            | Type              | Notes                                            |
 |------------------|-------------------|--------------------------------------------------|
 | `sessionId`      | string            | Groups lines into sessions                       |
 | `timestamp`      | int64 (unix ms)   | When the message was sent                        |
 | `project`        | string            | Absolute path of the working directory           |
-| `display`        | string            | User message text, or `"exit"` for session close |
-| `pastedContents` | map[string]object | Optional; key is a numeric string ID (e.g. `"1"`), value has `id` (int), `type` (string), `content` (string) |
+| `display`        | string            | User-visible text for the event (free-form text, commands, etc.) |
+| `pastedContents` | map[string]object | Optional; key is numeric string (`"1"`, `"2"`...). Value typically includes `id`, `type`, and either `content` or `contentHash` |
 
-Grouping logic: all lines sharing the same `sessionId` form one session. A session with a `"display": "exit"` entry is closed; those without may still be running.
+Grouping logic: all lines sharing the same `sessionId` form one session.
+
+Exit-like entries in `display`:
+
+- Exit-like is strictly defined as two commands: `"/exit"` and `"exit"`.
+- Compare after trimming whitespace (`strings.TrimSpace`), so `"/exit "` is treated as `"/exit"`.
+- Correct session state rule should be based on the chronologically last entry for a session: exited only if the last entry is one of the two exit commands above.
+- Current `cc-viewer` codebase does **not** store an `exited` flag in `SessionSummary` or render live/exited status in UI.
 
 Resuming a session (`claude --resume`) has two behaviors depending on whether the context window overflowed:
 
-- **Context intact**: same session ID, same transcript file. Claude Code appends new entries seamlessly -- `"exit"` does not permanently seal a session.
-- **Context overflowed**: new session ID, new transcript file. The first user message is a "continued from a previous conversation" summary injected by Claude Code (see "System-injected context" below).
+- **Context intact**: same session ID, same transcript file. New entries append to the same files.
+- **Context overflowed**: new session ID, new transcript file. The first user message is usually a "continued from a previous conversation..." summary injected by Claude Code (see "System-injected context" below).
 
-All session metadata (timestamps, project, user messages, pasted content) is also available in the transcript files. However, history.jsonl is the only source of `"exit"` markers, which is needed to distinguish live sessions from exited ones.
+`history.jsonl` and transcript files overlap but are not equivalent:
 
-Claude Code caps history.jsonl at ~2000 lines. Each line is either a user-initiated round or an `"exit"` marker, so the cap is ~2000 rounds across all sessions. Older sessions fall off this file but their transcript JSONL files remain on disk indefinitely (Claude Code never cleans them up).
+- `history.jsonl` provides `project`, `display`, and `pastedContents`.
+- Transcript files provide full turn-by-turn model/tool activity.
+- Transcript entries do not contain `history.pastedContents` in the same shape.
 
 ### Transcript files -- per-session JSONL
 
@@ -61,7 +75,7 @@ Path: `~/.claude/projects/<encoded-project>/<sessionId>.jsonl`
 Path encoding: every `/` in the absolute project path becomes `-`.
 Example: `/Users/frank/code/foo` -> `-Users-frank-code-foo`
 
-Each line is a JSON object with a `type` field. Relevant types:
+Each line is a JSON object with a top-level `type` field. Common observed types include:
 
 | type                     | Description                                  |
 |--------------------------|----------------------------------------------|
@@ -69,6 +83,7 @@ Each line is a JSON object with a `type` field. Relevant types:
 | `assistant`              | One model response (contains content blocks) |
 | `progress`               | Streaming progress                           |
 | `file-history-snapshot`  | File state snapshot                          |
+| `queue-operation`        | Internal queue status                        |
 
 `tool_use` and `thinking` are not top-level entry types. They are content block types *within* `assistant` entries (see "Content block types" below).
 
@@ -113,3 +128,13 @@ Each assistant entry carries a `message.usage` object:
 ```
 
 Multiple assistant entries in the same round share the same `input_tokens` and `cache_*` values (they repeat per entry in the same API call), while `output_tokens` accumulates across entries.
+
+## URL Routing
+
+The current frontend supports deep linking:
+
+- `/<sessionId>`: open session
+- `/<sessionId>/<roundIdx>`: open and scroll to round
+- `/<sessionId>/<roundIdx>/<blockIdx>`: open and scroll to block
+
+Hovering a round/block header shows `#` anchor actions that copy the matching deep link.
