@@ -638,10 +638,74 @@ html, body {
   accent-color: var(--accent);
 }
 
+.modal-field {
+  margin-bottom: 12px;
+}
+
+.modal-field label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+
+.modal-input {
+  width: 100%;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 6px 8px;
+  outline: none;
+}
+
+.modal-input:focus {
+  border-color: var(--accent);
+}
+
+.modal-error {
+  color: #dc2626;
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+
 .modal-actions {
   display: flex;
   gap: 8px;
   justify-content: flex-end;
+}
+
+.modal-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Toast */
+.toast {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  background: #1e40af;
+  color: #fff;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 10px 16px;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  z-index: 200;
+  max-width: 400px;
+  word-break: break-all;
+}
+
+.toast a {
+  color: #bfdbfe;
+  text-decoration: underline;
+}
+
+.toast a:hover {
+  color: #fff;
 }
 
 /* Scrollbar */

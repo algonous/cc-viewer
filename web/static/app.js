@@ -8,7 +8,7 @@ var state = {
   currentSession: null,
   selectedBlocks: {},
   filterText: '',
-  exportFormat: 'jsonl',
+  copyFormat: 'jsonl',
   roundOrder: 'asc',
 };
 
@@ -237,16 +237,15 @@ function loadTranscript(idx) {
   };
 }
 
-// --- API (for export only) ---
+// --- API ---
 
-function doExport() {
+function doCopy() {
   if (!state.currentSession) return;
   var body = {
     session_id: state.currentSession.session_id,
-    format: state.exportFormat,
+    format: state.copyFormat,
   };
 
-  // If blocks are selected, export only the selected blocks.
   var blocks = getSelectedBlocks();
   if (blocks) {
     body.blocks = blocks;
@@ -257,22 +256,66 @@ function doExport() {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body),
   }).then(function(r) {
-    var disposition = r.headers.get('Content-Disposition') || '';
-    var match = disposition.match(/filename="?([^"]+)"?/);
-    var filename = match ? match[1] : state.currentSession.session_id + '.' + state.exportFormat;
-    return r.blob().then(function(blob) { return {blob: blob, filename: filename}; });
-  }).then(function(result) {
-    var url = URL.createObjectURL(result.blob);
-    var a = document.createElement('a');
-    a.href = url;
-    a.download = result.filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    setStatus('Downloaded: ' + result.filename);
+    return r.text();
+  }).then(function(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function() {
+        setStatus('Copied (' + state.copyFormat + ')');
+      });
+    }
   });
-  closeExportModal();
+  closeCopyModal();
+}
+
+function doPublish() {
+  if (!state.currentSession) return;
+  var titleInput = document.getElementById('publish-title');
+  var title = titleInput.value.trim();
+  if (!title) return;
+
+  var errorEl = document.getElementById('publish-error');
+  errorEl.classList.add('hidden');
+  errorEl.textContent = '';
+
+  var confirmBtn = document.getElementById('publish-confirm');
+  confirmBtn.disabled = true;
+  confirmBtn.textContent = 'Publishing...';
+
+  var body = {
+    session_id: state.currentSession.session_id,
+    title: title,
+  };
+
+  var blocks = getSelectedBlocks();
+  if (blocks) {
+    body.blocks = blocks;
+  }
+
+  fetch('/api/publish', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  }).then(function(r) {
+    if (!r.ok) {
+      return r.text().then(function(text) {
+        throw {status: r.status, message: text, isAuth: r.headers.get('X-Publish-Error') === 'auth'};
+      });
+    }
+    return r.json();
+  }).then(function(data) {
+    closePublishModal();
+    showToast('Published: <a href="' + escapeHtml(data.url) + '" target="_blank">' + escapeHtml(data.url) + '</a>');
+  }).catch(function(err) {
+    if (err && err.isAuth) {
+      errorEl.textContent = 'Run `glab auth login` to authenticate.';
+    } else {
+      errorEl.textContent = err.message || 'Publish failed';
+    }
+    errorEl.classList.remove('hidden');
+  }).finally(function() {
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = 'Publish';
+  });
 }
 
 // --- Filter ---
@@ -723,41 +766,6 @@ function getSelectedBlocks() {
 
 // --- Selection actions ---
 
-function dumpSelected() {
-  var parts = [];
-  var blocks = document.querySelectorAll('#viewer-content .chat-block[data-block-id]');
-  for (var i = 0; i < blocks.length; i++) {
-    var bid = blocks[i].getAttribute('data-block-id');
-    if (state.selectedBlocks[bid]) {
-      var role = '';
-      var text = '';
-      if (blocks[i].classList.contains('compact-tool')) {
-        role = 'TOOL';
-        var tn = blocks[i].querySelector('.tool-name');
-        var ti = blocks[i].querySelector('.tool-input');
-        text = (tn ? tn.textContent : '');
-        if (ti && ti.textContent) text += ': ' + ti.textContent;
-      } else {
-        var roleEl = blocks[i].querySelector('.chat-role');
-        role = roleEl ? roleEl.textContent.trim() : '';
-        var body = blocks[i].querySelector('.fold-body');
-        text = body ? body.textContent.trim() : '';
-      }
-      if (role) {
-        parts.push('[' + role + ']\n' + text);
-      } else {
-        parts.push(text);
-      }
-    }
-  }
-  var result = parts.join('\n\n---\n\n');
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(result).then(function() {
-      setStatus('Copied ' + parts.length + ' block(s) to clipboard');
-    });
-  }
-}
-
 function clearAllSelections() {
   state.selectedBlocks = {};
   var checkboxes = document.querySelectorAll('#viewer-content .block-checkbox');
@@ -775,24 +783,60 @@ function clearAllSelections() {
   updateSelectionUI();
 }
 
-// --- Export modal ---
+// --- Copy modal ---
 
-function openExportModal() {
-  state.exportFormat = 'jsonl';
-  var modal = document.getElementById('export-modal');
+function openCopyModal() {
+  state.copyFormat = 'jsonl';
+  var modal = document.getElementById('copy-modal');
   modal.classList.remove('hidden');
-  updateFormatButtons();
+  updateCopyFormatButtons();
 }
 
-function closeExportModal() {
-  document.getElementById('export-modal').classList.add('hidden');
+function closeCopyModal() {
+  document.getElementById('copy-modal').classList.add('hidden');
 }
 
-function updateFormatButtons() {
-  var btns = document.querySelectorAll('.modal-options .modal-btn');
+function updateCopyFormatButtons() {
+  var btns = document.querySelectorAll('#copy-modal .modal-options .modal-btn');
   for (var i = 0; i < btns.length; i++) {
-    btns[i].classList.toggle('selected', btns[i].getAttribute('data-format') === state.exportFormat);
+    btns[i].classList.toggle('selected', btns[i].getAttribute('data-format') === state.copyFormat);
   }
+}
+
+// --- Publish modal ---
+
+function openPublishModal() {
+  var modal = document.getElementById('publish-modal');
+  var titleInput = document.getElementById('publish-title');
+  var errorEl = document.getElementById('publish-error');
+
+  // Pre-fill title from session's first message.
+  var defaultTitle = '';
+  if (state.currentSession && state.currentSession.first_message) {
+    defaultTitle = state.currentSession.first_message;
+    if (defaultTitle.length > 80) defaultTitle = defaultTitle.substring(0, 80) + '...';
+  }
+  titleInput.value = defaultTitle;
+  errorEl.classList.add('hidden');
+  errorEl.textContent = '';
+  modal.classList.remove('hidden');
+  titleInput.focus();
+  titleInput.select();
+}
+
+function closePublishModal() {
+  document.getElementById('publish-modal').classList.add('hidden');
+}
+
+// --- Toast ---
+
+var toastTimeout = null;
+function showToast(html) {
+  var toast = document.getElementById('toast');
+  toast.innerHTML = html;
+  toast.classList.remove('hidden');
+  clearTimeout(toastTimeout);
+  toastTimeout = setTimeout(function() { toast.classList.add('hidden'); }, 8000);
 }
 
 // --- Status message ---
@@ -872,11 +916,11 @@ document.getElementById('viewer-content').addEventListener('click', function(e) 
   navigator.clipboard.writeText(url).then(function() { setStatus('Copied: ' + path); });
 });
 
-// Export button.
-document.getElementById('btn-export').addEventListener('click', openExportModal);
+// Copy button (was "Dump").
+document.getElementById('btn-dump').addEventListener('click', openCopyModal);
 
-// Dump button.
-document.getElementById('btn-dump').addEventListener('click', dumpSelected);
+// Export button -> Publish.
+document.getElementById('btn-export').addEventListener('click', openPublishModal);
 
 // Clear button.
 document.getElementById('btn-clear').addEventListener('click', clearAllSelections);
@@ -889,21 +933,33 @@ document.getElementById('btn-sort').addEventListener('click', function() {
   updateSelectionUI();
 });
 
-// Export modal buttons.
-var formatBtns = document.querySelectorAll('.modal-options .modal-btn');
-for (var fi = 0; fi < formatBtns.length; fi++) {
-  formatBtns[fi].addEventListener('click', function() {
-    state.exportFormat = this.getAttribute('data-format');
-    updateFormatButtons();
+// Copy modal buttons.
+var copyFormatBtns = document.querySelectorAll('#copy-modal .modal-options .modal-btn');
+for (var fi = 0; fi < copyFormatBtns.length; fi++) {
+  copyFormatBtns[fi].addEventListener('click', function() {
+    state.copyFormat = this.getAttribute('data-format');
+    updateCopyFormatButtons();
   });
 }
 
-document.getElementById('export-confirm').addEventListener('click', doExport);
-document.getElementById('export-cancel').addEventListener('click', closeExportModal);
+document.getElementById('copy-confirm').addEventListener('click', doCopy);
+document.getElementById('copy-cancel').addEventListener('click', closeCopyModal);
 
-// Close modal on backdrop click.
-document.getElementById('export-modal').addEventListener('click', function(e) {
-  if (e.target === this) closeExportModal();
+document.getElementById('copy-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeCopyModal();
+});
+
+// Publish modal buttons.
+document.getElementById('publish-confirm').addEventListener('click', doPublish);
+document.getElementById('publish-cancel').addEventListener('click', closePublishModal);
+
+document.getElementById('publish-modal').addEventListener('click', function(e) {
+  if (e.target === this) closePublishModal();
+});
+
+// Publish on Enter key in title input.
+document.getElementById('publish-title').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') doPublish();
 });
 
 // --- Helpers ---

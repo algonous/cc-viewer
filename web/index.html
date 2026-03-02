@@ -32,19 +32,34 @@
     <div id="viewer-content"></div>
   </div>
 </div>
-<div id="export-modal" class="modal hidden">
+<div id="copy-modal" class="modal hidden">
   <div class="modal-content">
-    <div class="modal-title">Export</div>
+    <div class="modal-title">Copy to Clipboard</div>
     <div class="modal-options">
       <button data-format="jsonl" class="modal-btn selected">JSONL</button>
       <button data-format="md" class="modal-btn">Markdown</button>
     </div>
     <div class="modal-actions">
-      <button id="export-confirm" class="modal-btn primary">Export</button>
-      <button id="export-cancel" class="modal-btn">Cancel</button>
+      <button id="copy-confirm" class="modal-btn primary">Copy</button>
+      <button id="copy-cancel" class="modal-btn">Cancel</button>
     </div>
   </div>
 </div>
+<div id="publish-modal" class="modal hidden">
+  <div class="modal-content">
+    <div class="modal-title">Publish Snippet</div>
+    <div class="modal-field">
+      <label for="publish-title">Title</label>
+      <input id="publish-title" type="text" class="modal-input">
+    </div>
+    <div id="publish-error" class="modal-error hidden"></div>
+    <div class="modal-actions">
+      <button id="publish-confirm" class="modal-btn primary">Publish</button>
+      <button id="publish-cancel" class="modal-btn">Cancel</button>
+    </div>
+  </div>
+</div>
+<div id="toast" class="toast hidden"></div>
 <script src="/static/app.js"></script>
 </body>
 </html>

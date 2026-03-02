@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/algonous/cc-viewer/internal/data"
+	"github.com/algonous/cc-viewer/internal/publish"
 	"github.com/algonous/md2html/md2html"
 )
 
@@ -134,6 +135,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/sessions", s.handleSessions)
 	mux.HandleFunc("GET /api/transcript/{id}", s.handleTranscript)
 	mux.HandleFunc("POST /api/export", s.handleExport)
+	mux.HandleFunc("POST /api/publish", s.handlePublish)
 
 	// SSE streaming endpoints.
 	mux.HandleFunc("GET /api/sessions/stream", s.handleSessionStream)
@@ -185,6 +187,12 @@ type usageJSON struct {
 type exportRequest struct {
 	SessionID string  `json:"session_id"`
 	Format    string  `json:"format"`
+	Blocks    [][]int `json:"blocks,omitempty"`
+}
+
+type publishRequest struct {
+	SessionID string  `json:"session_id"`
+	Title     string  `json:"title"`
 	Blocks    [][]int `json:"blocks,omitempty"`
 }
 
@@ -332,6 +340,79 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
 	w.Write(content)
+}
+
+func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
+	var req publishRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if req.Title == "" {
+		http.Error(w, "title is required", http.StatusBadRequest)
+		return
+	}
+
+	// Find session.
+	s.mu.RLock()
+	var session data.SessionSummary
+	found := false
+	for _, sess := range s.sessions {
+		if sess.SessionID == req.SessionID {
+			session = sess
+			found = true
+			break
+		}
+	}
+	s.mu.RUnlock()
+	if !found {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+
+	// Load transcript.
+	path, err := data.FindTranscriptPath(s.claudeDir, req.SessionID)
+	if err != nil {
+		http.Error(w, "transcript not found", http.StatusNotFound)
+		return
+	}
+	transcript, err := data.LoadTranscript(path)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Convert request blocks from [][]int to [][2]int.
+	var blocks [][2]int
+	if len(req.Blocks) > 0 {
+		blocks = make([][2]int, 0, len(req.Blocks))
+		for _, pair := range req.Blocks {
+			if len(pair) == 2 {
+				blocks = append(blocks, [2]int{pair[0], pair[1]})
+			}
+		}
+	}
+
+	md := data.GenerateMarkdown(session, transcript, blocks)
+
+	pub := &publish.GitLab{}
+	result, err := pub.Publish(r.Context(), publish.Snippet{
+		Title:    req.Title,
+		Filename: req.SessionID + ".md",
+		Content:  string(md),
+	})
+	if err != nil {
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "auth") || strings.Contains(errMsg, "401") {
+			w.Header().Set("X-Publish-Error", "auth")
+			http.Error(w, errMsg, http.StatusUnauthorized)
+		} else {
+			http.Error(w, errMsg, http.StatusInternalServerError)
+		}
+		return
+	}
+
+	writeJSON(w, map[string]string{"url": result.URL})
 }
 
 // --- SSE Handlers ---
