@@ -476,6 +476,7 @@ function renderRound(round, idx) {
         '<span class="fold-arrow' + (startOpen ? ' open' : '') + '">&#9654;</span>' +
         '<span class="chat-role">' + group.role.toUpperCase() + '</span>' +
         '<span class="group-count">(' + group.indices.length + ')</span>' +
+        '<a class="anchor-link" data-anchor="/' + sid + '/' + idx + '/' + group.indices[0] + '" title="Copy link">#</a>' +
         '<span class="fold-summary"></span>' +
         '</div>' +
         '<div class="group-body' + (startOpen ? ' open' : '') + '">';

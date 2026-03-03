@@ -215,9 +215,6 @@ func toolInputSummary(toolName string, input json.RawMessage) string {
 		}
 	case "Bash":
 		if cmd, ok := m["command"].(string); ok {
-			if len(cmd) > 80 {
-				return cmd[:80] + "..."
-			}
 			return cmd
 		}
 	case "Glob":
@@ -240,14 +237,20 @@ func toolInputSummary(toolName string, input json.RawMessage) string {
 		if u, ok := m["url"].(string); ok {
 			return u
 		}
+	case "Skill":
+		s, _ := m["skill"].(string)
+		a, _ := m["args"].(string)
+		if s != "" && a != "" {
+			return s + " " + a
+		}
+		if s != "" {
+			return s
+		}
 	}
 
 	// Fallback: try "command", "file_path", "query", or first string value.
 	for _, key := range []string{"command", "file_path", "query", "pattern", "url"} {
 		if v, ok := m[key].(string); ok {
-			if len(v) > 80 {
-				return v[:80] + "..."
-			}
 			return v
 		}
 	}

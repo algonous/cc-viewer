@@ -3,7 +3,6 @@ package data
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -176,7 +175,6 @@ func TestToolInputSummary(t *testing.T) {
 	}{
 		{"Read", "Read", `{"file_path":"/foo/bar.go"}`, "/foo/bar.go"},
 		{"Bash", "Bash", `{"command":"ls -la"}`, "ls -la"},
-		{"Bash long", "Bash", `{"command":"` + strings.Repeat("x", 100) + `"}`, strings.Repeat("x", 80) + "..."},
 		{"Grep", "Grep", `{"pattern":"foo.*bar"}`, "foo.*bar"},
 		{"Unknown", "Custom", `{"a":1,"b":2}`, "2 params"},
 	}
