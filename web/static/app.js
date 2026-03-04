@@ -3,6 +3,7 @@
 var state = {
   sessions: [],
   filteredSessions: [],
+  pinnedSessions: [],
   sidebarIdx: 0,
   transcript: null,
   currentSession: null,
@@ -14,6 +15,12 @@ var state = {
 
 // Blocks that start folded by default.
 var FOLD_CLOSED = {context: true, tool: true, thinking: true};
+
+var PIN_SVG = '<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">' +
+  '<path d="M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1 0 .707c-.48.48-1.072.588-1.503.588-.177 0-.335-.018-.46-.039l-3.134 3.134a5.927 5.927 0 0 1 .16 1.013c.046.702-.032 1.687-.72 2.375a.5.5 0 0 1-.707 0l-2.829-2.828-3.182 3.182c-.195.195-1.219.902-1.414.707-.195-.195.512-1.22.707-1.414l3.182-3.182-2.828-2.829a.5.5 0 0 1 0-.707c.688-.688 1.673-.767 2.375-.72a5.922 5.922 0 0 1 1.013.16l3.134-3.133a2.772 2.772 0 0 1-.04-.461c0-.43.108-1.022.589-1.503a.5.5 0 0 1 .353-.146z"/>' +
+  '</svg>';
+
+var dragSrcId = null;
 
 // SSE connections.
 var sessionSource = null;
@@ -320,6 +327,18 @@ function doPublish() {
 
 // --- Filter ---
 
+function loadPinnedSessions() {
+  try {
+    var s = localStorage.getItem('cc-viewer-pinned');
+    if (s) state.pinnedSessions = JSON.parse(s);
+  } catch(e) {}
+}
+
+function savePinnedSessions() {
+  try { localStorage.setItem('cc-viewer-pinned', JSON.stringify(state.pinnedSessions)); }
+  catch(e) {}
+}
+
 function applyFilter() {
   var text = state.filterText.toLowerCase();
   if (!text) {
@@ -331,6 +350,15 @@ function applyFilter() {
         (s.all_messages && s.all_messages.toLowerCase().indexOf(text) >= 0);
     });
   }
+  // Sort pinned sessions to the top, in pin order.
+  var pinned = [], unpinned = [];
+  state.filteredSessions.forEach(function(s) {
+    (state.pinnedSessions.indexOf(s.session_id) >= 0 ? pinned : unpinned).push(s);
+  });
+  pinned.sort(function(a, b) {
+    return state.pinnedSessions.indexOf(a.session_id) - state.pinnedSessions.indexOf(b.session_id);
+  });
+  state.filteredSessions = pinned.concat(unpinned);
 }
 
 // --- Render ---
@@ -338,15 +366,28 @@ function applyFilter() {
 function renderSidebar() {
   var list = document.getElementById('session-list');
   var html = '';
+  var pinnedCount = state.filteredSessions.filter(function(s) {
+    return state.pinnedSessions.indexOf(s.session_id) >= 0;
+  }).length;
   for (var i = 0; i < state.filteredSessions.length; i++) {
     var s = state.filteredSessions[i];
     var active = i === state.sidebarIdx ? ' active' : '';
+    var isPinned = state.pinnedSessions.indexOf(s.session_id) >= 0;
+    var pinnedCls = isPinned ? ' pinned' : '';
+    var draggable = isPinned ? ' draggable="true"' : '';
     var ts = formatTime(s.last_ts);
     var msg = escapeHtml(truncate(s.first_message || '', 60));
-    html += '<div class="session-item' + active + '" data-idx="' + i + '">' +
-      '<div><span class="session-project">' + escapeHtml(s.project_name || '?') + '</span>' +
+    var pinBtnCls = 'pin-btn' + (isPinned ? ' pinned' : '');
+    html += '<div class="session-item' + active + pinnedCls + '" data-idx="' + i + '" data-session-id="' + escapeHtml(s.session_id) + '"' + draggable + '>' +
+      '<div class="session-row"><span class="session-project">' + escapeHtml(s.project_name || '?') + '</span>' +
       '<span class="session-time">' + ts + '</span></div>' +
-      '<div class="session-message">"' + msg + '"</div></div>';
+      '<div class="session-message">"' + msg + '"</div>' +
+      '<button class="' + pinBtnCls + '" data-session-id="' + escapeHtml(s.session_id) + '" title="Pin/Unpin">' + PIN_SVG + '</button>' +
+      '</div>';
+    // Divider between last pinned and first unpinned.
+    if (isPinned && i === pinnedCount - 1 && pinnedCount < state.filteredSessions.length) {
+      html += '<div class="session-divider"></div>';
+    }
   }
   if (state.filteredSessions.length === 0) {
     html = '<div class="empty-state">No sessions</div>';
@@ -875,13 +916,80 @@ document.getElementById('filter-input').addEventListener('input', function() {
   }
 });
 
+function togglePin(sid) {
+  var idx = state.pinnedSessions.indexOf(sid);
+  if (idx >= 0) state.pinnedSessions.splice(idx, 1);
+  else state.pinnedSessions.push(sid);
+  savePinnedSessions();
+  applyFilter();
+  renderSidebar();
+  updateSessionCount();
+}
+
 // Session click.
 document.getElementById('session-list').addEventListener('click', function(e) {
+  var pinBtn = e.target.closest('.pin-btn');
+  if (pinBtn) {
+    togglePin(pinBtn.getAttribute('data-session-id'));
+    return;
+  }
   var item = e.target.closest('.session-item');
   if (item) {
     var idx = parseInt(item.getAttribute('data-idx'), 10);
     loadTranscript(idx);
   }
+});
+
+// Drag-and-drop for pinned session reordering.
+var sessionList = document.getElementById('session-list');
+
+sessionList.addEventListener('dragstart', function(e) {
+  var item = e.target.closest('.session-item[draggable="true"]');
+  if (!item) return;
+  dragSrcId = item.getAttribute('data-session-id');
+  item.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
+});
+
+sessionList.addEventListener('dragover', function(e) {
+  e.preventDefault();
+  var item = e.target.closest('.session-item[draggable="true"]');
+  if (!item || item.getAttribute('data-session-id') === dragSrcId) return;
+  // Remove drag-over from all others.
+  sessionList.querySelectorAll('.drag-over').forEach(function(el) { el.classList.remove('drag-over'); });
+  item.classList.add('drag-over');
+});
+
+sessionList.addEventListener('dragleave', function(e) {
+  var item = e.target.closest('.session-item');
+  if (item) item.classList.remove('drag-over');
+});
+
+sessionList.addEventListener('dragend', function(e) {
+  sessionList.querySelectorAll('.dragging, .drag-over').forEach(function(el) {
+    el.classList.remove('dragging', 'drag-over');
+  });
+  dragSrcId = null;
+});
+
+sessionList.addEventListener('drop', function(e) {
+  e.preventDefault();
+  var target = e.target.closest('.session-item[draggable="true"]');
+  if (!target || !dragSrcId) return;
+  var targetId = target.getAttribute('data-session-id');
+  if (targetId === dragSrcId) return;
+
+  var srcIdx = state.pinnedSessions.indexOf(dragSrcId);
+  var tgtIdx = state.pinnedSessions.indexOf(targetId);
+  if (srcIdx < 0 || tgtIdx < 0) return;
+
+  state.pinnedSessions.splice(srcIdx, 1);
+  var newTgt = state.pinnedSessions.indexOf(targetId);
+  state.pinnedSessions.splice(newTgt, 0, dragSrcId);
+
+  savePinnedSessions();
+  applyFilter();
+  renderSidebar();
 });
 
 // Block checkbox toggle (delegated).
@@ -1066,4 +1174,5 @@ function scrollToTarget(roundIdx, blockIdx) {
 }
 
 initFromURL();
+loadPinnedSessions();
 startSessionStream();
