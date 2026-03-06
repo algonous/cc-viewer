@@ -140,7 +140,11 @@ func (s *TranscriptStreamer) processAssistant(entry *transcriptEntry) *StreamEve
 						ev.Blocks = append(ev.Blocks, StreamBlock{Role: "thinking", Text: b.Thinking})
 					}
 				case "tool_use":
-					tc := &ToolCall{Name: b.Name, InputSummary: toolInputSummary(b.Name, b.Input)}
+					tc := &ToolCall{
+						Name:         b.Name,
+						InputSummary: toolInputSummary(b.Name, b.Input),
+						InputJSON:    prettyJSON(b.Input),
+					}
 					ev.Blocks = append(ev.Blocks, StreamBlock{Role: "tool", ToolCall: tc})
 				}
 			}

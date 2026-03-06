@@ -175,6 +175,7 @@ type blockJSON struct {
 	HTML         string `json:"html,omitempty"`
 	Name         string `json:"name,omitempty"`
 	InputSummary string `json:"input_summary,omitempty"`
+	InputJSON    string `json:"input_json,omitempty"`
 }
 
 type usageJSON struct {
@@ -207,6 +208,7 @@ type sseBlockEvent struct {
 	HTML          string `json:"html,omitempty"`
 	Name          string `json:"name,omitempty"`
 	InputSummary  string `json:"input_summary,omitempty"`
+	InputJSON     string `json:"input_json,omitempty"`
 }
 
 type sseUsageEvent struct {
@@ -250,6 +252,7 @@ func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request) {
 					Role:         "tool",
 					Name:         b.ToolCall.Name,
 					InputSummary: b.ToolCall.InputSummary,
+					InputJSON:    b.ToolCall.InputJSON,
 				}
 			} else {
 				blocks[j] = blockJSON{
@@ -548,6 +551,7 @@ func (s *Server) sendStreamEvent(w http.ResponseWriter, flusher http.Flusher, ev
 		if block.Role == "tool" && block.ToolCall != nil {
 			sse.Name = block.ToolCall.Name
 			sse.InputSummary = block.ToolCall.InputSummary
+			sse.InputJSON = block.ToolCall.InputJSON
 		} else {
 			sse.HTML = renderMarkdown(block.Text)
 		}

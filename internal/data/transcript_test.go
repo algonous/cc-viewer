@@ -176,7 +176,9 @@ func TestToolInputSummary(t *testing.T) {
 		{"Read", "Read", `{"file_path":"/foo/bar.go"}`, "/foo/bar.go"},
 		{"Bash", "Bash", `{"command":"ls -la"}`, "ls -la"},
 		{"Grep", "Grep", `{"pattern":"foo.*bar"}`, "foo.*bar"},
-		{"Unknown", "Custom", `{"a":1,"b":2}`, "2 params"},
+		{"Unknown", "Custom", `{"a":1,"b":2}`, `{"a":1,"b":2}`},
+		{"MCP sql_query", "mcp__datadog__analyze_datadog_logs", `{"sql_query":"SELECT count(*) FROM logs","telemetry":{"intent":"count logs"}}`, "SELECT count(*) FROM logs"},
+		{"MCP telemetry-only", "mcp__datadog__check_datadog_mcp_setup", `{"telemetry":{"intent":"checking MCP setup"}}`, `{"telemetry":{"intent":"checking MCP setup"}}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

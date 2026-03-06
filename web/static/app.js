@@ -214,6 +214,7 @@ function loadTranscript(idx) {
       html: block.html || '',
       name: block.name || '',
       input_summary: block.input_summary || '',
+      input_json: block.input_json || '',
     });
 
     scheduleRender();
@@ -446,7 +447,12 @@ function buildBlockContent(b) {
     if (b.input_summary) {
       html += '<span class="tool-input">' + escapeHtml(b.input_summary) + '</span>';
     }
-    html += '</div></div>';
+    html += '</div>';
+    if (b.input_json) {
+      html += '<details class="tool-input-json"><summary>params</summary>' +
+        '<pre>' + escapeHtml(b.input_json) + '</pre></details>';
+    }
+    html += '</div>';
     return html;
   }
   return b.html || '';
@@ -567,13 +573,18 @@ function renderBlock(roundIdx, blockIdx, role, contentHtml, sid) {
 function renderCompactToolBlock(roundIdx, blockIdx, block, sid) {
   var blockId = 'b-' + roundIdx + '-' + blockIdx;
 
-  return '<div class="chat-block chat-tool compact-tool" data-block-id="' + blockId + '">' +
+  var html = '<div class="chat-block chat-tool compact-tool" data-block-id="' + blockId + '">' +
     '<div class="block-header">' +
     '<span class="tool-name">' + escapeHtml(block.name || '') + '</span>' +
     '<span class="tool-input">' + escapeHtml(block.input_summary || '') + '</span>' +
     '<a class="anchor-link" data-anchor="/' + sid + '/' + roundIdx + '/' + blockIdx + '" title="Copy link">#</a>' +
-    '</div>' +
     '</div>';
+  if (block.input_json) {
+    html += '<details class="tool-input-json"><summary>params</summary>' +
+      '<pre>' + escapeHtml(block.input_json) + '</pre></details>';
+  }
+  html += '</div>';
+  return html;
 }
 
 // After innerHTML is set, fill in fold summaries from rendered content.

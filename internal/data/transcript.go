@@ -3,8 +3,8 @@ package data
 import (
 	"bufio"
 	"encoding/json"
-	"fmt"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -161,7 +161,11 @@ func handleAssistantEntry(t *Transcript, entry *transcriptEntry) {
 						r.Blocks = append(r.Blocks, Block{Role: "thinking", Text: b.Thinking})
 					}
 				case "tool_use":
-					tc := ToolCall{Name: b.Name, InputSummary: toolInputSummary(b.Name, b.Input)}
+					tc := ToolCall{
+						Name:         b.Name,
+						InputSummary: toolInputSummary(b.Name, b.Input),
+						InputJSON:    prettyJSON(b.Input),
+					}
 					r.Blocks = append(r.Blocks, Block{Role: "tool", ToolCall: &tc})
 				}
 			}
@@ -248,12 +252,38 @@ func toolInputSummary(toolName string, input json.RawMessage) string {
 		}
 	}
 
-	// Fallback: try "command", "file_path", "query", or first string value.
-	for _, key := range []string{"command", "file_path", "query", "pattern", "url"} {
-		if v, ok := m[key].(string); ok {
+	// Fallback: return the first top-level string value (sorted keys for determinism).
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if v, ok := m[k].(string); ok {
 			return v
 		}
 	}
 
-	return fmt.Sprintf("%d params", len(m))
+	// No top-level string found; show raw JSON truncated as a hint.
+	const maxSummary = 80
+	if len(input) <= maxSummary {
+		return string(input)
+	}
+	return string(input[:maxSummary-3]) + "..."
+}
+
+// prettyJSON returns an indented JSON string for display purposes.
+func prettyJSON(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var v interface{}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return string(raw)
+	}
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return string(raw)
+	}
+	return string(b)
 }

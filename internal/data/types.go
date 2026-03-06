@@ -33,6 +33,7 @@ type Round struct {
 type ToolCall struct {
 	Name         string
 	InputSummary string
+	InputJSON    string // prettified JSON of the full input, for display
 }
 
 // Usage holds token counts aggregated from assistant message.usage fields.

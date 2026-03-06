@@ -496,6 +496,34 @@ html, body {
   text-overflow: ellipsis;
 }
 
+.tool-input-json {
+  margin-top: 4px;
+}
+
+.tool-input-json summary {
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+}
+
+.tool-input-json summary:hover {
+  color: var(--text-dim);
+}
+
+.tool-input-json pre {
+  margin-top: 4px;
+  padding: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-x: auto;
+  white-space: pre;
+  color: var(--text);
+}
+
 /* --- Content rendered from markdown (inside fold-body) --- */
 .fold-body p {
   margin: 0.4em 0;
