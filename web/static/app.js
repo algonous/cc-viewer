@@ -16,6 +16,11 @@ var state = {
 // Blocks that start folded by default.
 var FOLD_CLOSED = {context: true, tool: true, thinking: true};
 
+var COPY_PATH_SVG = '<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">' +
+  '<path d="M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1v-1z"/>' +
+  '<path d="M9.5 1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5v-1a.5.5 0 0 1 .5-.5h3zm-3-1A1.5 1.5 0 0 0 5 1.5v1A1.5 1.5 0 0 0 6.5 4h3A1.5 1.5 0 0 0 11 2.5v-1A1.5 1.5 0 0 0 9.5 0h-3z"/>' +
+  '</svg>';
+
 var PIN_SVG = '<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">' +
   '<path d="M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1 0 .707c-.48.48-1.072.588-1.503.588-.177 0-.335-.018-.46-.039l-3.134 3.134a5.927 5.927 0 0 1 .16 1.013c.046.702-.032 1.687-.72 2.375a.5.5 0 0 1-.707 0l-2.829-2.828-3.182 3.182c-.195.195-1.219.902-1.414.707-.195-.195.512-1.22.707-1.414l3.182-3.182-2.828-2.829a.5.5 0 0 1 0-.707c.688-.688 1.673-.767 2.375-.72a5.922 5.922 0 0 1 1.013.16l3.134-3.133a2.772 2.772 0 0 1-.04-.461c0-.43.108-1.022.589-1.503a.5.5 0 0 1 .353-.146z"/>' +
   '</svg>';
@@ -379,10 +384,14 @@ function renderSidebar() {
     var ts = formatTime(s.last_ts);
     var msg = escapeHtml(truncate(s.first_message || '', 60));
     var pinBtnCls = 'pin-btn' + (isPinned ? ' pinned' : '');
+    var copyPathBtn = s.file_path
+      ? '<button class="copy-path-btn" data-file-path="' + escapeHtml(s.file_path) + '" title="Copy file path">' + COPY_PATH_SVG + '</button>'
+      : '';
     html += '<div class="session-item' + active + pinnedCls + '" data-idx="' + i + '" data-session-id="' + escapeHtml(s.session_id) + '"' + draggable + '>' +
       '<div class="session-row"><span class="session-project">' + escapeHtml(s.project_name || '?') + '</span>' +
       '<span class="session-time">' + ts + '</span></div>' +
       '<div class="session-message">"' + msg + '"</div>' +
+      copyPathBtn +
       '<button class="' + pinBtnCls + '" data-session-id="' + escapeHtml(s.session_id) + '" title="Pin/Unpin">' + PIN_SVG + '</button>' +
       '</div>';
     // Divider between last pinned and first unpinned.
@@ -942,6 +951,15 @@ document.getElementById('session-list').addEventListener('click', function(e) {
   var pinBtn = e.target.closest('.pin-btn');
   if (pinBtn) {
     togglePin(pinBtn.getAttribute('data-session-id'));
+    return;
+  }
+  var copyBtn = e.target.closest('.copy-path-btn');
+  if (copyBtn) {
+    var fp = copyBtn.getAttribute('data-file-path');
+    navigator.clipboard.writeText(fp).then(function() {
+      copyBtn.classList.add('copied');
+      setTimeout(function() { copyBtn.classList.remove('copied'); }, 1000);
+    });
     return;
   }
   var item = e.target.closest('.session-item');

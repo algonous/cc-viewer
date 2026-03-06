@@ -150,6 +150,7 @@ type sessionJSON struct {
 	SessionID    string `json:"session_id"`
 	Project      string `json:"project"`
 	ProjectName  string `json:"project_name"`
+	FilePath     string `json:"file_path,omitempty"`
 	FirstMessage string `json:"first_message"`
 	AllMessages  string `json:"all_messages"`
 	FirstTS      int64  `json:"first_ts"`
@@ -470,6 +471,7 @@ func (s *Server) buildSessionList() []sessionJSON {
 			SessionID:    sess.SessionID,
 			Project:      sess.Project,
 			ProjectName:  sess.ProjectName,
+			FilePath:     sess.FilePath,
 			FirstMessage: sess.FirstMessage,
 			AllMessages:  sess.AllMessages,
 			FirstTS:      sess.FirstTS,

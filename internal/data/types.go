@@ -5,6 +5,7 @@ type SessionSummary struct {
 	SessionID    string
 	Project      string
 	ProjectName  string
+	FilePath     string // absolute path to the session JSONL file
 	FirstMessage string
 	AllMessages  string // all user messages concatenated, for search
 	FirstTS      int64  // unix ms

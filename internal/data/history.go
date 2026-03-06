@@ -172,6 +172,7 @@ func orphanSessionFromTranscript(path string, sid string, encodedProject string)
 		SessionID:   sid,
 		Project:     project,
 		ProjectName: projectName(project),
+		FilePath:    path,
 	}
 
 	if info != nil {
@@ -263,7 +264,11 @@ func indexTranscriptText(claudeDir string, groups map[string]*SessionSummary, me
 			if _, ok := groups[sid]; !ok {
 				continue
 			}
-			jobs = append(jobs, fileJob{sid: sid, path: filepath.Join(projPath, name)})
+			p := filepath.Join(projPath, name)
+			if groups[sid].FilePath == "" {
+				groups[sid].FilePath = p
+			}
+			jobs = append(jobs, fileJob{sid: sid, path: p})
 		}
 	}
 

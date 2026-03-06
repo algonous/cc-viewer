@@ -149,6 +149,29 @@ html, body {
 .pin-btn.pinned { opacity: 1; color: var(--accent); }
 .pin-btn:hover { background: var(--bg-hover); color: var(--text); }
 
+.copy-path-btn {
+  position: absolute;
+  top: 5px;
+  right: 29px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  line-height: 1;
+}
+.session-item:hover .copy-path-btn { opacity: 1; }
+.copy-path-btn:hover { background: var(--bg-hover); color: var(--text); }
+.copy-path-btn.copied { color: #16a34a; opacity: 1; }
+
 .session-divider {
   height: 1px;
   background: var(--border);
