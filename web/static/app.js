@@ -384,9 +384,8 @@ function renderSidebar() {
     var ts = formatTime(s.last_ts);
     var msg = escapeHtml(truncate(s.first_message || '', 60));
     var pinBtnCls = 'pin-btn' + (isPinned ? ' pinned' : '');
-    var copyPathBtn = s.file_path
-      ? '<button class="copy-path-btn" data-file-path="' + escapeHtml(s.file_path) + '" title="Copy file path">' + COPY_PATH_SVG + '</button>'
-      : '';
+    var copyPathBtn = '<button class="copy-path-btn" data-session-id="' + escapeHtml(s.session_id) + '" data-file-path="' +
+      escapeHtml(s.file_path || '') + '" title="Copy file path">' + COPY_PATH_SVG + '</button>';
     html += '<div class="session-item' + active + pinnedCls + '" data-idx="' + i + '" data-session-id="' + escapeHtml(s.session_id) + '"' + draggable + '>' +
       '<div class="session-row"><span class="session-project">' + escapeHtml(s.project_name || '?') + '</span>' +
       '<span class="session-time">' + ts + '</span></div>' +
@@ -956,9 +955,29 @@ document.getElementById('session-list').addEventListener('click', function(e) {
   var copyBtn = e.target.closest('.copy-path-btn');
   if (copyBtn) {
     var fp = copyBtn.getAttribute('data-file-path');
-    navigator.clipboard.writeText(fp).then(function() {
-      copyBtn.classList.add('copied');
-      setTimeout(function() { copyBtn.classList.remove('copied'); }, 1000);
+    var sid = copyBtn.getAttribute('data-session-id');
+    var copyPath = function(path) {
+      if (!path) return;
+      navigator.clipboard.writeText(path).then(function() {
+        copyBtn.classList.add('copied');
+        setTimeout(function() { copyBtn.classList.remove('copied'); }, 1000);
+      });
+    };
+    if (fp) {
+      copyPath(fp);
+      return;
+    }
+    fetch('/api/sessions/' + encodeURIComponent(sid) + '/path').then(function(res) {
+      if (!res.ok) throw new Error('failed to resolve path');
+      return res.json();
+    }).then(function(data) {
+      var resolved = (data && data.file_path) || '';
+      if (!resolved) throw new Error('empty path');
+      copyBtn.setAttribute('data-file-path', resolved);
+      copyPath(resolved);
+    }).catch(function() {
+      copyBtn.title = 'Session file not found';
+      setTimeout(function() { copyBtn.title = 'Copy file path'; }, 1500);
     });
     return;
   }

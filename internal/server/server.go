@@ -133,6 +133,7 @@ func (s *Server) Handler() http.Handler {
 
 	// REST API endpoints.
 	mux.HandleFunc("GET /api/sessions", s.handleSessions)
+	mux.HandleFunc("GET /api/sessions/{id}/path", s.handleSessionPath)
 	mux.HandleFunc("GET /api/transcript/{id}", s.handleTranscript)
 	mux.HandleFunc("POST /api/export", s.handleExport)
 	mux.HandleFunc("POST /api/publish", s.handlePublish)
@@ -156,6 +157,11 @@ type sessionJSON struct {
 	FirstTS      int64  `json:"first_ts"`
 	LastTS       int64  `json:"last_ts"`
 	MessageCount int    `json:"message_count"`
+}
+
+type sessionPathJSON struct {
+	SessionID string `json:"session_id"`
+	FilePath  string `json:"file_path"`
 }
 
 type transcriptJSON struct {
@@ -227,6 +233,30 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	result := s.buildSessionList()
 	s.mu.RUnlock()
 	writeJSON(w, result)
+}
+
+func (s *Server) handleSessionPath(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	path, err := data.FindTranscriptPath(s.claudeDir, id)
+	if err != nil {
+		http.Error(w, "transcript not found", http.StatusNotFound)
+		return
+	}
+
+	// Cache resolved path for later session list payloads.
+	s.mu.Lock()
+	for i := range s.sessions {
+		if s.sessions[i].SessionID == id {
+			s.sessions[i].FilePath = path
+			break
+		}
+	}
+	s.mu.Unlock()
+
+	writeJSON(w, sessionPathJSON{
+		SessionID: id,
+		FilePath:  path,
+	})
 }
 
 func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request) {
