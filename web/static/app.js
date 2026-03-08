@@ -394,11 +394,12 @@ function renderSidebar() {
     var ts = formatTime(s.last_ts);
     var msg = escapeHtml(truncate(s.first_message || '', 60));
     var pinBtnCls = 'pin-btn' + (isPinned ? ' pinned' : '');
-    var titleStyle = s.source_color ? ' style="color:' + escapeHtml(s.source_color) + '"' : '';
+    var source = (s && s.source) || splitSessionID(s.session_id || '').source || 'claude';
+    var sourceCls = source === 'codex' ? ' source-codex' : ' source-claude';
     var copyPathBtn = '<button class="copy-path-btn" data-session-id="' + escapeHtml(s.session_id) + '" data-file-path="' +
       escapeHtml(s.file_path || '') + '" title="Copy file path">' + COPY_PATH_SVG + '</button>';
     html += '<div class="session-item' + active + pinnedCls + '" data-idx="' + i + '" data-session-id="' + escapeHtml(s.session_id) + '"' + draggable + '>' +
-      '<div class="session-row"><span class="session-project"' + titleStyle + '>' + escapeHtml(s.project_name || '?') + '</span>' +
+      '<div class="session-row"><span class="session-project' + sourceCls + '">' + escapeHtml(s.project_name || '?') + '</span>' +
       '<span class="session-time">' + ts + '</span></div>' +
       '<div class="session-message">"' + msg + '"</div>' +
       copyPathBtn +

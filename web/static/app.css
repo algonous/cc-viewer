@@ -111,6 +111,14 @@ html, body {
   font-size: 13px;
 }
 
+.session-project.source-claude {
+  color: #ea580c;
+}
+
+.session-project.source-codex {
+  color: #0f766e;
+}
+
 .session-time {
   color: var(--text-muted);
   font-size: 11px;
@@ -421,14 +429,14 @@ html, body {
   color: #854d0e;
 }
 
-/* CLAUDE / AGENT -- blue */
+/* CLAUDE / AGENT -- orange */
 .chat-claude {
-  border-left-color: #3b82f6;
-  background: #eff6ff;
+  border-left-color: #f97316;
+  background: #fff7ed;
 }
 
 .chat-claude .chat-role {
-  color: #1e40af;
+  color: #c2410c;
 }
 
 /* CODEX / AGENT -- teal */
@@ -441,14 +449,14 @@ html, body {
   color: #0f766e;
 }
 
-/* TOOL -- green */
+/* TOOL -- magenta */
 .chat-tool {
-  border-left-color: #22c55e;
-  background: #f0fdf4;
+  border-left-color: #ec4899;
+  background: #fdf2f8;
 }
 
 .chat-tool .chat-role {
-  color: #166534;
+  color: #9d174d;
 }
 
 /* CONTEXT -- purple */
@@ -479,11 +487,11 @@ html, body {
 
 /* Block group */
 .block-group { margin: 0.5em 0; border-radius: 4px; border-left: 4px solid var(--border); }
-.block-group-tool { border-left-color: #22c55e; background: #f0fdf4; }
+.block-group-tool { border-left-color: #ec4899; background: #fdf2f8; }
 .block-group-thinking { border-left-color: #9ca3af; background: #f9fafb; }
 .block-group-context { border-left-color: #a78bfa; background: #f5f3ff; }
 .block-group-you { border-left-color: #d97706; background: #fefce8; }
-.block-group-claude { border-left-color: #3b82f6; background: #eff6ff; }
+.block-group-claude { border-left-color: #f97316; background: #fff7ed; }
 .block-group-codex { border-left-color: #14b8a6; background: #f0fdfa; }
 .group-header {
   display: flex;
@@ -498,11 +506,11 @@ html, body {
 .group-body.open { display: block; }
 .block-group:has(.group-body.open) .group-header .fold-summary { display: none; }
 .group-count { color: var(--text-muted); font-size: 11px; }
-.block-group-tool .group-header .chat-role { color: #166534; }
+.block-group-tool .group-header .chat-role { color: #9d174d; }
 .block-group-thinking .group-header .chat-role { color: #4b5563; font-style: italic; }
 .block-group-context .group-header .chat-role { color: #5b21b6; }
 .block-group-you .group-header .chat-role { color: #854d0e; }
-.block-group-claude .group-header .chat-role { color: #1e40af; }
+.block-group-claude .group-header .chat-role { color: #c2410c; }
 .block-group-codex .group-header .chat-role { color: #0f766e; }
 
 /* --- Tool list (structured, not from markdown) --- */
@@ -519,7 +527,7 @@ html, body {
 }
 
 .tool-name {
-  color: #166534;
+  color: #9d174d;
   font-weight: 600;
   flex-shrink: 0;
 }

@@ -18,24 +18,21 @@ type SourceRoot struct {
 }
 
 type SourceAdapter struct {
-	ID         string
-	DirName    string
-	Display    string
-	TitleColor string
+	ID      string
+	DirName string
+	Display string
 }
 
 var sourceAdapters = []SourceAdapter{
 	{
-		ID:         SourceClaude,
-		DirName:    ".claude",
-		Display:    "Claude",
-		TitleColor: "#1e40af",
+		ID:      SourceClaude,
+		DirName: ".claude",
+		Display: "Claude",
 	},
 	{
-		ID:         SourceCodex,
-		DirName:    ".codex",
-		Display:    "Codex",
-		TitleColor: "#0f766e",
+		ID:      SourceCodex,
+		DirName: ".codex",
+		Display: "Codex",
 	},
 }
 
@@ -52,13 +49,6 @@ func AdapterBySource(source string) (SourceAdapter, bool) {
 		}
 	}
 	return SourceAdapter{}, false
-}
-
-func SourceTitleColor(source string) string {
-	if a, ok := AdapterBySource(source); ok {
-		return a.TitleColor
-	}
-	return "#1e40af"
 }
 
 func DiscoverDefaultRoots(home string) []SourceRoot {

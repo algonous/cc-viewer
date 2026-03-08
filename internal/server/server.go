@@ -165,7 +165,6 @@ func (s *Server) Handler() http.Handler {
 type sessionJSON struct {
 	SessionID    string `json:"session_id"`
 	Source       string `json:"source"`
-	SourceColor  string `json:"source_color"`
 	Project      string `json:"project"`
 	ProjectName  string `json:"project_name"`
 	FilePath     string `json:"file_path,omitempty"`
@@ -526,7 +525,6 @@ func (s *Server) buildSessionList() []sessionJSON {
 		result[i] = sessionJSON{
 			SessionID:    sess.SessionID,
 			Source:       sess.Source,
-			SourceColor:  data.SourceTitleColor(sess.Source),
 			Project:      sess.Project,
 			ProjectName:  sess.ProjectName,
 			FilePath:     sess.FilePath,
