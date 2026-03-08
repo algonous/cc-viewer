@@ -110,7 +110,7 @@ func TestParseHistoryLine(t *testing.T) {
 	if u == nil {
 		t.Fatal("expected non-nil")
 	}
-	if u.SessionID != "aaa" || u.Timestamp != 1000 || u.Display != "hello world" {
+	if u.SessionID != "claude:aaa" || u.Timestamp != 1000 || u.Display != "hello world" {
 		t.Errorf("got %+v", u)
 	}
 	if u.ProjectName != "foo" {

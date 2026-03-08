@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,29 +14,204 @@ import (
 	"time"
 )
 
-// historyEntry is the raw JSON structure of one line in history.jsonl.
+// Claude history line.
 type historyEntry struct {
-	SessionID      string                    `json:"sessionId"`
-	Timestamp      int64                     `json:"timestamp"`
-	Project        string                    `json:"project"`
-	Display        string                    `json:"display"`
-	PastedContents map[string]pastedContent  `json:"pastedContents,omitempty"`
+	SessionID      string                   `json:"sessionId"`
+	Timestamp      int64                    `json:"timestamp"`
+	Project        string                   `json:"project"`
+	Display        string                   `json:"display"`
+	PastedContents map[string]pastedContent `json:"pastedContents,omitempty"`
 }
 
-// pastedContent is the structure of a pasted text block in history.jsonl.
 type pastedContent struct {
 	Content string `json:"content"`
 }
 
-// LoadSessions reads the history.jsonl file and discovers orphaned transcript
-// files (sessions that fell off the history.jsonl 2000-line cap).
-// Returns all sessions sorted by most recent first.
-func LoadSessions(claudeDir string) ([]SessionSummary, error) {
+// Codex history line.
+type codexHistoryEntry struct {
+	SessionID string `json:"session_id"`
+	TS        int64  `json:"ts"`
+	Text      string `json:"text"`
+}
+
+// LoadSessions keeps backward compatibility for single-root callers.
+func LoadSessions(rootDir string) ([]SessionSummary, error) {
+	source := sourceFromDir(rootDir)
+	if source == "" {
+		source = SourceClaude
+	}
+	return LoadSessionsMulti([]SourceRoot{{Source: source, Dir: rootDir}})
+}
+
+// LoadSessionsMulti loads and merges sessions from multiple roots.
+func LoadSessionsMulti(roots []SourceRoot) ([]SessionSummary, error) {
+	if len(roots) == 0 {
+		return nil, nil
+	}
+
+	var all []SessionSummary
+	for _, root := range roots {
+		source := root.Source
+		if source == "" {
+			source = sourceFromDir(root.Dir)
+		}
+		if source == "" {
+			continue
+		}
+
+		var sessions []SessionSummary
+		var err error
+		switch source {
+		case SourceClaude:
+			sessions, err = loadClaudeSessions(root.Dir)
+		case SourceCodex:
+			sessions, err = loadCodexSessions(root.Dir)
+		default:
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, sessions...)
+	}
+
+	sort.Slice(all, func(i, j int) bool { return all[i].LastTS > all[j].LastTS })
+	return all, nil
+}
+
+func loadCodexSessions(codexDir string) ([]SessionSummary, error) {
+	path := filepath.Join(codexDir, "history.jsonl")
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	transcriptBySID := findCodexTranscriptPaths(codexDir)
+	type group struct {
+		s  *SessionSummary
+		ms []string
+	}
+	groups := make(map[string]*group)
+	var order []string
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	for scanner.Scan() {
+		var e codexHistoryEntry
+		if err := json.Unmarshal(scanner.Bytes(), &e); err != nil || e.SessionID == "" {
+			continue
+		}
+		g, ok := groups[e.SessionID]
+		if !ok {
+			rawID := e.SessionID
+			ts := normalizeEpochMillis(e.TS)
+			s := SessionSummary{
+				SessionID:    MakeSessionKey(SourceCodex, rawID),
+				RawSessionID: rawID,
+				Source:       SourceCodex,
+				DataDir:      codexDir,
+				FirstMessage: e.Text,
+				FirstTS:      ts,
+				LastTS:       ts,
+				FilePath:     transcriptBySID[rawID],
+			}
+			if s.FilePath != "" {
+				s.Project = codexProjectFromTranscript(s.FilePath)
+				s.ProjectName = projectName(s.Project)
+			}
+			if s.ProjectName == "" {
+				s.ProjectName = SourceCodex
+			}
+			g = &group{s: &s}
+			groups[e.SessionID] = g
+			order = append(order, e.SessionID)
+		}
+		g.s.MessageCount++
+		if e.Text != "" {
+			g.ms = append(g.ms, e.Text)
+		}
+		ts := normalizeEpochMillis(e.TS)
+		if ts < g.s.FirstTS {
+			g.s.FirstTS = ts
+			g.s.FirstMessage = e.Text
+		}
+		if ts > g.s.LastTS {
+			g.s.LastTS = ts
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	out := make([]SessionSummary, 0, len(order))
+	for _, sid := range order {
+		g := groups[sid]
+		g.s.AllMessages = strings.Join(g.ms, "\n")
+		out = append(out, *g.s)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].LastTS > out[j].LastTS })
+	return out, nil
+}
+
+func findCodexTranscriptPaths(codexDir string) map[string]string {
+	base := filepath.Join(codexDir, "sessions")
+	result := map[string]string{}
+
+	_ = filepath.WalkDir(base, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
+			return nil
+		}
+		name := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+		parts := strings.Split(name, "-")
+		if len(parts) < 2 {
+			return nil
+		}
+		sid := strings.Join(parts[len(parts)-5:], "-")
+		if prev, ok := result[sid]; ok {
+			prevInfo, _ := os.Stat(prev)
+			newInfo, _ := os.Stat(path)
+			if prevInfo != nil && newInfo != nil && prevInfo.ModTime().After(newInfo.ModTime()) {
+				return nil
+			}
+		}
+		result[sid] = path
+		return nil
+	})
+	return result
+}
+
+func codexProjectFromTranscript(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	var entry struct {
+		Type    string `json:"type"`
+		Payload struct {
+			Cwd string `json:"cwd"`
+		} `json:"payload"`
+	}
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	for scanner.Scan() {
+		if json.Unmarshal(scanner.Bytes(), &entry) != nil {
+			continue
+		}
+		if entry.Type == "session_meta" && entry.Payload.Cwd != "" {
+			return entry.Payload.Cwd
+		}
+	}
+	return ""
+}
+
+func loadClaudeSessions(claudeDir string) ([]SessionSummary, error) {
 	groups := make(map[string]*SessionSummary)
 	messages := make(map[string][]string)
 	var order []string
 
-	// Phase 1: Parse history.jsonl for indexed sessions.
 	path := filepath.Join(claudeDir, "history.jsonl")
 	f, err := os.Open(path)
 	if err != nil {
@@ -46,33 +222,33 @@ func LoadSessions(claudeDir string) ([]SessionSummary, error) {
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 	for scanner.Scan() {
 		var e historyEntry
-		if err := json.Unmarshal(scanner.Bytes(), &e); err != nil {
+		if err := json.Unmarshal(scanner.Bytes(), &e); err != nil || e.SessionID == "" {
 			continue
 		}
-		if e.SessionID == "" {
-			continue
-		}
-
-		s, ok := groups[e.SessionID]
+		rawID := e.SessionID
+		s, ok := groups[rawID]
 		if !ok {
 			s = &SessionSummary{
-				SessionID:    e.SessionID,
+				SessionID:    MakeSessionKey(SourceClaude, rawID),
+				RawSessionID: rawID,
+				Source:       SourceClaude,
+				DataDir:      claudeDir,
 				Project:      e.Project,
 				ProjectName:  projectName(e.Project),
 				FirstMessage: e.Display,
 				FirstTS:      e.Timestamp,
 				LastTS:       e.Timestamp,
 			}
-			groups[e.SessionID] = s
-			order = append(order, e.SessionID)
+			groups[rawID] = s
+			order = append(order, rawID)
 		}
 		s.MessageCount++
 		if e.Display != "" && e.Display != "exit" {
-			messages[e.SessionID] = append(messages[e.SessionID], e.Display)
+			messages[rawID] = append(messages[rawID], e.Display)
 		}
 		for _, pc := range e.PastedContents {
 			if pc.Content != "" {
-				messages[e.SessionID] = append(messages[e.SessionID], pc.Content)
+				messages[rawID] = append(messages[rawID], pc.Content)
 			}
 		}
 		if e.Timestamp < s.FirstTS {
@@ -88,31 +264,20 @@ func LoadSessions(claudeDir string) ([]SessionSummary, error) {
 		return nil, err
 	}
 
-	// Phase 2: Scan transcript files for orphaned sessions not in history.jsonl.
-	discoverOrphanSessions(claudeDir, groups, messages, &order)
-
-	// Phase 3: Extract all user + assistant text from transcripts for full-text search.
-	indexTranscriptText(claudeDir, groups, messages)
+	discoverClaudeOrphans(claudeDir, groups, messages, &order)
+	indexClaudeTranscriptText(claudeDir, groups, messages)
 
 	result := make([]SessionSummary, 0, len(groups))
-	for _, id := range order {
-		s := groups[id]
-		s.AllMessages = strings.Join(messages[id], "\n")
+	for _, rawID := range order {
+		s := groups[rawID]
+		s.AllMessages = strings.Join(messages[rawID], "\n")
 		result = append(result, *s)
 	}
-
-	// Sort by most recent first.
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].LastTS > result[j].LastTS
-	})
-
+	sort.Slice(result, func(i, j int) bool { return result[i].LastTS > result[j].LastTS })
 	return result, nil
 }
 
-// discoverOrphanSessions finds transcript JSONL files that have no entry in
-// history.jsonl (due to the 2000-line cap) and adds them to the session index.
-// It reads the first user message from each orphan transcript for search.
-func discoverOrphanSessions(claudeDir string, groups map[string]*SessionSummary, messages map[string][]string, order *[]string) {
+func discoverClaudeOrphans(claudeDir string, groups map[string]*SessionSummary, messages map[string][]string, order *[]string) {
 	projectsDir := filepath.Join(claudeDir, "projects")
 	projEntries, err := os.ReadDir(projectsDir)
 	if err != nil {
@@ -130,67 +295,55 @@ func discoverOrphanSessions(claudeDir string, groups map[string]*SessionSummary,
 		}
 		for _, file := range files {
 			name := file.Name()
-			if file.IsDir() || !strings.HasSuffix(name, ".jsonl") {
+			if file.IsDir() || !strings.HasSuffix(name, ".jsonl") || strings.HasPrefix(name, "agent-") {
 				continue
 			}
-			// Skip subagent files (agent-* prefix).
-			if strings.HasPrefix(name, "agent-") {
+			rawID := strings.TrimSuffix(name, ".jsonl")
+			if _, ok := groups[rawID]; ok {
 				continue
 			}
-			sid := strings.TrimSuffix(name, ".jsonl")
-			if _, ok := groups[sid]; ok {
-				continue // already in history.jsonl
-			}
-
-			// Orphan session -- extract metadata from transcript.
-			s := orphanSessionFromTranscript(filepath.Join(projPath, name), sid, projEntry.Name())
+			s := orphanClaudeSessionFromTranscript(filepath.Join(projPath, name), rawID, projEntry.Name(), claudeDir)
 			if s == nil {
 				continue
 			}
-			groups[sid] = s
-			messages[sid] = []string{s.FirstMessage}
-			*order = append(*order, sid)
+			groups[rawID] = s
+			messages[rawID] = []string{s.FirstMessage}
+			*order = append(*order, rawID)
 		}
 	}
 }
 
-// orphanSessionFromTranscript reads the first few lines of a transcript to
-// extract basic session metadata for orphaned sessions.
-func orphanSessionFromTranscript(path string, sid string, encodedProject string) *SessionSummary {
+func orphanClaudeSessionFromTranscript(path, rawID, encodedProject, claudeDir string) *SessionSummary {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil
 	}
 	defer f.Close()
-
 	info, _ := f.Stat()
 
-	// Decode project path from directory name (- -> /).
 	project := strings.ReplaceAll(encodedProject, "-", "/")
-
 	s := &SessionSummary{
-		SessionID:   sid,
-		Project:     project,
-		ProjectName: projectName(project),
-		FilePath:    path,
+		SessionID:    MakeSessionKey(SourceClaude, rawID),
+		RawSessionID: rawID,
+		Source:       SourceClaude,
+		DataDir:      claudeDir,
+		Project:      project,
+		ProjectName:  projectName(project),
+		FilePath:     path,
 	}
-
 	if info != nil {
 		s.LastTS = info.ModTime().UnixMilli()
 	}
 
-	// Scan for first user message.
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 	for scanner.Scan() {
 		var entry transcriptEntry
-		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
+		if json.Unmarshal(scanner.Bytes(), &entry) != nil {
 			continue
 		}
 		if entry.Type != "user" || entry.Message == nil {
 			if entry.Timestamp != "" && s.FirstTS == 0 {
-				// Use first entry timestamp as approximate start time.
-				// Parse ISO 8601 timestamp.
 				if t, err := parseTimestamp(entry.Timestamp); err == nil {
 					s.FirstTS = t
 				}
@@ -198,13 +351,13 @@ func orphanSessionFromTranscript(path string, sid string, encodedProject string)
 			continue
 		}
 		var msg transcriptMessage
-		if err := json.Unmarshal(entry.Message, &msg); err != nil {
+		if json.Unmarshal(entry.Message, &msg) != nil {
 			continue
 		}
 		content := strings.TrimSpace(string(msg.Content))
 		if len(content) > 0 && content[0] == '"' {
 			var text string
-			if err := json.Unmarshal(msg.Content, &text); err == nil && text != "" {
+			if json.Unmarshal(msg.Content, &text) == nil && text != "" {
 				s.FirstMessage = text
 				if s.FirstTS == 0 {
 					if t, err := parseTimestamp(entry.Timestamp); err == nil {
@@ -216,33 +369,22 @@ func orphanSessionFromTranscript(path string, sid string, encodedProject string)
 			}
 		}
 	}
-
-	// No user message found -- still return with file-based metadata.
 	if s.FirstTS == 0 {
 		s.FirstTS = s.LastTS
 	}
 	return s
 }
 
-// indexTranscriptText scans all transcript files and extracts user + assistant
-// text for full-text search. This adds to the existing messages map so that
-// the filter can find text in Claude's responses, not just user input.
-type indexResult struct {
-	sid   string
-	texts []string
-}
-
-func indexTranscriptText(claudeDir string, groups map[string]*SessionSummary, messages map[string][]string) {
+func indexClaudeTranscriptText(claudeDir string, groups map[string]*SessionSummary, messages map[string][]string) {
 	projectsDir := filepath.Join(claudeDir, "projects")
 	projEntries, err := os.ReadDir(projectsDir)
 	if err != nil {
 		return
 	}
 
-	// Collect all files to process.
 	type fileJob struct {
-		sid  string
-		path string
+		rawID string
+		path  string
 	}
 	var jobs []fileJob
 
@@ -260,19 +402,22 @@ func indexTranscriptText(claudeDir string, groups map[string]*SessionSummary, me
 			if file.IsDir() || !strings.HasSuffix(name, ".jsonl") || strings.HasPrefix(name, "agent-") {
 				continue
 			}
-			sid := strings.TrimSuffix(name, ".jsonl")
-			if _, ok := groups[sid]; !ok {
+			rawID := strings.TrimSuffix(name, ".jsonl")
+			if _, ok := groups[rawID]; !ok {
 				continue
 			}
 			p := filepath.Join(projPath, name)
-			if groups[sid].FilePath == "" {
-				groups[sid].FilePath = p
+			if groups[rawID].FilePath == "" {
+				groups[rawID].FilePath = p
 			}
-			jobs = append(jobs, fileJob{sid: sid, path: p})
+			jobs = append(jobs, fileJob{rawID: rawID, path: p})
 		}
 	}
 
-	// Process files concurrently.
+	type indexResult struct {
+		rawID string
+		texts []string
+	}
 	results := make(chan indexResult, len(jobs))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, runtime.NumCPU())
@@ -283,27 +428,22 @@ func indexTranscriptText(claudeDir string, groups map[string]*SessionSummary, me
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			texts := extractTranscriptTexts(j.path)
+			texts := extractClaudeTranscriptTexts(j.path)
 			if len(texts) > 0 {
-				results <- indexResult{sid: j.sid, texts: texts}
+				results <- indexResult{rawID: j.rawID, texts: texts}
 			}
 		}(job)
 	}
-
 	go func() {
 		wg.Wait()
 		close(results)
 	}()
-
 	for r := range results {
-		messages[r.sid] = append(messages[r.sid], r.texts...)
+		messages[r.rawID] = append(messages[r.rawID], r.texts...)
 	}
 }
 
-// extractTranscriptTexts reads a transcript file and returns all user messages
-// and assistant response texts for search indexing.
-// Uses selective JSON parsing: only fully parses user/assistant lines.
-func extractTranscriptTexts(path string) []string {
+func extractClaudeTranscriptTexts(path string) []string {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil
@@ -313,20 +453,15 @@ func extractTranscriptTexts(path string) []string {
 	var texts []string
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 4*1024*1024), 4*1024*1024)
-
 	for scanner.Scan() {
 		line := scanner.Bytes()
-		// Fast pre-filter: skip lines that aren't user or assistant entries.
-		if !bytes.Contains(line, []byte(`"type":"user"`)) &&
-			!bytes.Contains(line, []byte(`"type":"assistant"`)) {
+		if !bytes.Contains(line, []byte(`"type":"user"`)) && !bytes.Contains(line, []byte(`"type":"assistant"`)) {
 			continue
 		}
-
 		var entry transcriptEntry
 		if json.Unmarshal(line, &entry) != nil || entry.Message == nil {
 			continue
 		}
-
 		switch entry.Type {
 		case "user":
 			var msg transcriptMessage
@@ -340,7 +475,6 @@ func extractTranscriptTexts(path string) []string {
 					texts = append(texts, text)
 				}
 			}
-
 		case "assistant":
 			var msg transcriptMessage
 			if json.Unmarshal(entry.Message, &msg) != nil {
@@ -359,11 +493,9 @@ func extractTranscriptTexts(path string) []string {
 			}
 		}
 	}
-
 	return texts
 }
 
-// parseTimestamp parses an ISO 8601 timestamp string to unix milliseconds.
 func parseTimestamp(ts string) (int64, error) {
 	t, err := time.Parse(time.RFC3339Nano, ts)
 	if err != nil {
@@ -375,7 +507,14 @@ func parseTimestamp(ts string) (int64, error) {
 	return t.UnixMilli(), nil
 }
 
-// projectName extracts the last path component from an absolute project path.
+func normalizeEpochMillis(ts int64) int64 {
+	// Convert unix seconds to milliseconds. Keep true millisecond epochs unchanged.
+	if ts >= 1_000_000_000 && ts < 1_000_000_000_000 {
+		return ts * 1000
+	}
+	return ts
+}
+
 func projectName(project string) string {
 	if project == "" {
 		return ""
@@ -383,44 +522,66 @@ func projectName(project string) string {
 	return filepath.Base(strings.TrimRight(project, "/"))
 }
 
-// SessionUpdate is produced by ParseHistoryLine for a single history.jsonl line.
+// SessionUpdate is produced by ParseHistoryLine for a single history line.
 type SessionUpdate struct {
-	SessionID   string
-	Project     string
-	ProjectName string
-	Display     string
-	Timestamp   int64
+	SessionID    string
+	RawSessionID string
+	Source       string
+	DataDir      string
+	Project      string
+	ProjectName  string
+	Display      string
+	Timestamp    int64
 }
 
-// ParseHistoryLine parses a single history.jsonl line into a SessionUpdate.
-// Returns nil if the line is invalid or has no session ID.
+// ParseHistoryLineForSource parses a single history line based on source.
+func ParseHistoryLineForSource(line []byte, source, rootDir string) *SessionUpdate {
+	switch source {
+	case SourceClaude:
+		var e historyEntry
+		if err := json.Unmarshal(line, &e); err != nil || e.SessionID == "" {
+			return nil
+		}
+		return &SessionUpdate{
+			SessionID:    MakeSessionKey(SourceClaude, e.SessionID),
+			RawSessionID: e.SessionID,
+			Source:       SourceClaude,
+			DataDir:      rootDir,
+			Project:      e.Project,
+			ProjectName:  projectName(e.Project),
+			Display:      e.Display,
+			Timestamp:    normalizeEpochMillis(e.Timestamp),
+		}
+	case SourceCodex:
+		var e codexHistoryEntry
+		if err := json.Unmarshal(line, &e); err != nil || e.SessionID == "" {
+			return nil
+		}
+		return &SessionUpdate{
+			SessionID:    MakeSessionKey(SourceCodex, e.SessionID),
+			RawSessionID: e.SessionID,
+			Source:       SourceCodex,
+			DataDir:      rootDir,
+			Display:      e.Text,
+			Timestamp:    normalizeEpochMillis(e.TS),
+		}
+	default:
+		return nil
+	}
+}
+
+// ParseHistoryLine keeps backward compatibility with Claude-only callers.
 func ParseHistoryLine(line []byte) *SessionUpdate {
-	var e historyEntry
-	if err := json.Unmarshal(line, &e); err != nil {
-		return nil
-	}
-	if e.SessionID == "" {
-		return nil
-	}
-	return &SessionUpdate{
-		SessionID:   e.SessionID,
-		Project:     e.Project,
-		ProjectName: projectName(e.Project),
-		Display:     e.Display,
-		Timestamp:   e.Timestamp,
-	}
+	return ParseHistoryLineForSource(line, SourceClaude, "")
 }
 
-// FindTranscriptPath locates the transcript JSONL file for a given session.
-// It searches through all project directories under claudeDir/projects/.
-func FindTranscriptPath(claudeDir string, sessionID string) (string, error) {
+func FindTranscriptPath(claudeDir string, rawSessionID string) (string, error) {
 	projectsDir := filepath.Join(claudeDir, "projects")
 	entries, err := os.ReadDir(projectsDir)
 	if err != nil {
 		return "", err
 	}
-
-	filename := sessionID + ".jsonl"
+	filename := rawSessionID + ".jsonl"
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -430,12 +591,28 @@ func FindTranscriptPath(claudeDir string, sessionID string) (string, error) {
 			return candidate, nil
 		}
 	}
-
 	return "", os.ErrNotExist
 }
 
-// EncodeProjectDir encodes an absolute path to the directory name format
-// used under ~/.claude/projects/ (replace "/" with "-").
-func EncodeProjectDir(absPath string) string {
-	return strings.ReplaceAll(absPath, "/", "-")
+func EncodeProjectDir(project string) string {
+	return strings.ReplaceAll(project, "/", "-")
+}
+
+func ResolveTranscriptPath(s SessionSummary) (string, error) {
+	if s.FilePath != "" {
+		return s.FilePath, nil
+	}
+	switch s.Source {
+	case SourceClaude:
+		return FindTranscriptPath(s.DataDir, s.RawSessionID)
+	case SourceCodex:
+		if m := findCodexTranscriptPaths(s.DataDir); m != nil {
+			if p, ok := m[s.RawSessionID]; ok {
+				return p, nil
+			}
+		}
+		return "", os.ErrNotExist
+	default:
+		return "", fmt.Errorf("unknown source: %s", s.Source)
+	}
 }

@@ -59,6 +59,16 @@ function startSessionStream() {
           }
         }
         delete state._initialSessionID;
+      } else if (state._initialSessionSource && state._initialRawSessionID) {
+        for (var j = 0; j < state.filteredSessions.length; j++) {
+          var sess = state.filteredSessions[j];
+          if (sess.source === state._initialSessionSource && rawSessionID(sess) === state._initialRawSessionID) {
+            targetIdx = j;
+            break;
+          }
+        }
+        delete state._initialSessionSource;
+        delete state._initialRawSessionID;
       }
       if (state.filteredSessions.length > 0) {
         loadTranscript(targetIdx);
@@ -106,7 +116,7 @@ function loadTranscript(idx) {
 
   var sid = state.currentSession.session_id;
   if (state._initialRoundIdx === undefined) {
-    history.replaceState(null, '', '/' + sid);
+    history.replaceState(null, '', buildSessionPath(state.currentSession));
   }
 
   // Show loading state.
@@ -384,10 +394,11 @@ function renderSidebar() {
     var ts = formatTime(s.last_ts);
     var msg = escapeHtml(truncate(s.first_message || '', 60));
     var pinBtnCls = 'pin-btn' + (isPinned ? ' pinned' : '');
+    var titleStyle = s.source_color ? ' style="color:' + escapeHtml(s.source_color) + '"' : '';
     var copyPathBtn = '<button class="copy-path-btn" data-session-id="' + escapeHtml(s.session_id) + '" data-file-path="' +
       escapeHtml(s.file_path || '') + '" title="Copy file path">' + COPY_PATH_SVG + '</button>';
     html += '<div class="session-item' + active + pinnedCls + '" data-idx="' + i + '" data-session-id="' + escapeHtml(s.session_id) + '"' + draggable + '>' +
-      '<div class="session-row"><span class="session-project">' + escapeHtml(s.project_name || '?') + '</span>' +
+      '<div class="session-row"><span class="session-project"' + titleStyle + '>' + escapeHtml(s.project_name || '?') + '</span>' +
       '<span class="session-time">' + ts + '</span></div>' +
       '<div class="session-message">"' + msg + '"</div>' +
       copyPathBtn +
@@ -468,6 +479,7 @@ function buildBlockContent(b) {
 
 function renderRound(round, idx) {
   var sid = state.currentSession ? state.currentSession.session_id : '';
+  var routeBase = state.currentSession ? buildSessionPath(state.currentSession) : '';
   var ts = formatShortTime(round.user_timestamp || '');
   var tokens = '';
   if (round.usage) {
@@ -485,7 +497,7 @@ function renderRound(round, idx) {
     '<span class="fold-arrow open">&#9654;</span>' +
     '<span class="round-index">#' + (idx + 1) + '</span>' +
     '<span class="round-timestamp">' + escapeHtml(ts) + '</span>' +
-    '<a class="anchor-link" data-anchor="/' + sid + '/' + idx + '" title="Copy link">#</a>' +
+    '<a class="anchor-link" data-anchor="' + routeBase + '/' + idx + '" title="Copy link">#</a>' +
     '<span class="round-fold-summary"></span>' +
     tokens +
     '</div>';
@@ -505,9 +517,11 @@ function renderRound(round, idx) {
 
   for (var g = 0; g < groups.length; g++) {
     var group = groups[g];
+    var groupRoleKey = roleKeyForDisplay(group.role);
+    var groupRoleLabel = roleLabelForDisplay(group.role);
     if (group.indices.length === 1) {
       var bi = group.indices[0];
-      html += renderBlock(idx, bi, blocks[bi].role, buildBlockContent(blocks[bi]), sid);
+      html += renderBlock(idx, bi, blocks[bi].role, buildBlockContent(blocks[bi]), routeBase);
     } else {
       var startOpen = !FOLD_CLOSED[group.role];
       // Tool groups get a single checkbox for the entire group.
@@ -525,22 +539,22 @@ function renderRound(round, idx) {
         groupCheckedClass = (allGroupSelected && groupBlockIds.length > 0) ? ' block-checked' : '';
         checkboxHtml = '<input type="checkbox" class="group-checkbox" data-group-blocks="' + groupBlockIds.join(',') + '"' + groupChecked + '>';
       }
-      html += '<div class="block-group block-group-' + group.role + groupCheckedClass + '">' +
+      html += '<div class="block-group block-group-' + groupRoleKey + groupCheckedClass + '">' +
         '<div class="group-header">' +
         checkboxHtml +
         '<span class="fold-arrow' + (startOpen ? ' open' : '') + '">&#9654;</span>' +
-        '<span class="chat-role">' + group.role.toUpperCase() + '</span>' +
+        '<span class="chat-role">' + groupRoleLabel + '</span>' +
         '<span class="group-count">(' + group.indices.length + ')</span>' +
-        '<a class="anchor-link" data-anchor="/' + sid + '/' + idx + '/' + group.indices[0] + '" title="Copy link">#</a>' +
+        '<a class="anchor-link" data-anchor="' + routeBase + '/' + idx + '/' + group.indices[0] + '" title="Copy link">#</a>' +
         '<span class="fold-summary"></span>' +
         '</div>' +
         '<div class="group-body' + (startOpen ? ' open' : '') + '">';
       for (var k = 0; k < group.indices.length; k++) {
         var bi2 = group.indices[k];
         if (group.role === 'tool') {
-          html += renderCompactToolBlock(idx, bi2, blocks[bi2], sid);
+          html += renderCompactToolBlock(idx, bi2, blocks[bi2], routeBase);
         } else {
-          html += renderBlock(idx, bi2, blocks[bi2].role, buildBlockContent(blocks[bi2]), sid);
+          html += renderBlock(idx, bi2, blocks[bi2].role, buildBlockContent(blocks[bi2]), routeBase);
         }
       }
       html += '</div></div>';
@@ -552,21 +566,22 @@ function renderRound(round, idx) {
 }
 
 // Render a single chat block with fold toggle and checkbox.
-function renderBlock(roundIdx, blockIdx, role, contentHtml, sid) {
+function renderBlock(roundIdx, blockIdx, role, contentHtml, routeBase) {
   var blockId = 'b-' + roundIdx + '-' + blockIdx;
-  var roleLabel = role.toUpperCase();
+  var roleLabel = roleLabelForDisplay(role);
+  var roleKey = roleKeyForDisplay(role);
   var startOpen = !FOLD_CLOSED[role];
   var checked = state.selectedBlocks[blockId] ? ' checked' : '';
   var checkedClass = state.selectedBlocks[blockId] ? ' block-checked' : '';
 
-  var html = '<div class="chat-block chat-' + role + checkedClass + '" data-block-id="' + blockId + '">';
+  var html = '<div class="chat-block chat-' + roleKey + checkedClass + '" data-block-id="' + blockId + '">';
 
   // Header row: checkbox + fold arrow + role label + anchor link + summary.
   html += '<div class="block-header">' +
     '<input type="checkbox" class="block-checkbox" data-block-id="' + blockId + '"' + checked + '>' +
     '<span class="fold-arrow' + (startOpen ? ' open' : '') + '">&#9654;</span>' +
     '<span class="chat-role">' + roleLabel + '</span>' +
-    '<a class="anchor-link" data-anchor="/' + sid + '/' + roundIdx + '/' + blockIdx + '" title="Copy link">#</a>' +
+    '<a class="anchor-link" data-anchor="' + routeBase + '/' + roundIdx + '/' + blockIdx + '" title="Copy link">#</a>' +
     '<span class="fold-summary"></span>' +
     '</div>';
 
@@ -578,14 +593,14 @@ function renderBlock(roundIdx, blockIdx, role, contentHtml, sid) {
 }
 
 // Render a compact tool block for use inside a tool group (no fold mechanism).
-function renderCompactToolBlock(roundIdx, blockIdx, block, sid) {
+function renderCompactToolBlock(roundIdx, blockIdx, block, routeBase) {
   var blockId = 'b-' + roundIdx + '-' + blockIdx;
 
   var html = '<div class="chat-block chat-tool compact-tool" data-block-id="' + blockId + '">' +
     '<div class="block-header">' +
     '<span class="tool-name">' + escapeHtml(block.name || '') + '</span>' +
     '<span class="tool-input">' + escapeHtml(block.input_summary || '') + '</span>' +
-    '<a class="anchor-link" data-anchor="/' + sid + '/' + roundIdx + '/' + blockIdx + '" title="Copy link">#</a>' +
+    '<a class="anchor-link" data-anchor="' + routeBase + '/' + roundIdx + '/' + blockIdx + '" title="Copy link">#</a>' +
     '</div>';
   if (block.input_json) {
     html += '<details class="tool-input-json"><summary>params</summary>' +
@@ -1161,21 +1176,56 @@ function escapeHtml(str) {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+function splitSessionID(sessionID) {
+  var idx = sessionID.indexOf(':');
+  if (idx < 0) return { source: '', raw: sessionID };
+  return { source: sessionID.substring(0, idx), raw: sessionID.substring(idx + 1) };
+}
+
+function roleKeyForDisplay(role) {
+  if (role === 'claude' && state.currentSession && state.currentSession.source === 'codex') {
+    return 'codex';
+  }
+  return role;
+}
+
+function roleLabelForDisplay(role) {
+  var key = roleKeyForDisplay(role);
+  return key.toUpperCase();
+}
+
+function rawSessionID(session) {
+  var parts = splitSessionID(session.session_id || '');
+  return parts.raw;
+}
+
+function buildSessionPath(session) {
+  var source = (session && session.source) || splitSessionID(session.session_id || '').source || 'claude';
+  var raw = rawSessionID(session);
+  return '/' + encodeURIComponent(source) + '/' + encodeURIComponent(raw);
+}
+
 // --- Init ---
 
 function initFromURL() {
   var path = window.location.pathname;
   if (path.length <= 1) return;
   var parts = path.substring(1).split('/');
-  if (parts.length >= 1 && parts[0]) {
-    state._initialSessionID = parts[0];
+  if (parts.length >= 2 && (parts[0] === 'claude' || parts[0] === 'codex') && parts[1]) {
+    state._initialSessionSource = decodeURIComponent(parts[0]);
+    state._initialRawSessionID = decodeURIComponent(parts[1]);
+  } else if (parts.length >= 1 && parts[0]) {
+    // Backward-compatible route: /source:raw
+    state._initialSessionID = decodeURIComponent(parts[0]);
   }
-  if (parts.length >= 2 && parts[1] !== '') {
-    var ri = parseInt(parts[1], 10);
+
+  var roundPartIdx = (state._initialRawSessionID ? 2 : 1);
+  if (parts.length >= roundPartIdx + 1 && parts[roundPartIdx] !== '') {
+    var ri = parseInt(parts[roundPartIdx], 10);
     if (!isNaN(ri)) state._initialRoundIdx = ri;
   }
-  if (parts.length >= 3 && parts[2] !== '') {
-    var bi = parseInt(parts[2], 10);
+  if (parts.length >= roundPartIdx + 2 && parts[roundPartIdx + 1] !== '') {
+    var bi = parseInt(parts[roundPartIdx + 1], 10);
     if (!isNaN(bi)) state._initialBlockIdx = bi;
   }
 }

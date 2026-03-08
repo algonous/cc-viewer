@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -18,8 +17,8 @@ import (
 
 // Server handles HTTP requests for the cc-viewer web UI.
 type Server struct {
-	claudeDir string
-	webFS     fs.FS
+	roots []data.SourceRoot
+	webFS fs.FS
 
 	mu       sync.RWMutex
 	sessions []data.SessionSummary
@@ -28,13 +27,14 @@ type Server struct {
 	broadcastMu sync.Mutex
 	broadcast   chan struct{}
 
-	historyStop chan struct{}
+	historyStop  chan struct{}
+	historyStops []chan struct{}
 }
 
 // New creates a new Server.
-func New(claudeDir string, sessions []data.SessionSummary, webFS fs.FS) *Server {
+func New(roots []data.SourceRoot, sessions []data.SessionSummary, webFS fs.FS) *Server {
 	return &Server{
-		claudeDir: claudeDir,
+		roots:     roots,
 		sessions:  sessions,
 		webFS:     webFS,
 		broadcast: make(chan struct{}),
@@ -45,17 +45,18 @@ func New(claudeDir string, sessions []data.SessionSummary, webFS fs.FS) *Server 
 // Existing content was already loaded at startup; this tails from the end.
 func (s *Server) StartHistoryTail() {
 	s.historyStop = make(chan struct{})
-	historyPath := filepath.Join(s.claudeDir, "history.jsonl")
-
-	// Skip existing content (already loaded by LoadSessions at startup).
-	offset, _ := data.FileSize(historyPath)
-
-	lines := data.TailFile(historyPath, offset, s.historyStop)
-	go func() {
-		for line := range lines {
-			s.processHistoryLine(line)
-		}
-	}()
+	for _, root := range s.roots {
+		historyPath := root.Dir + "/history.jsonl"
+		offset, _ := data.FileSize(historyPath)
+		stop := make(chan struct{})
+		s.historyStops = append(s.historyStops, stop)
+		lines := data.TailFile(historyPath, offset, stop)
+		go func(source, dir string, ch <-chan []byte) {
+			for line := range ch {
+				s.processHistoryLine(line, source, dir)
+			}
+		}(root.Source, root.Dir, lines)
+	}
 }
 
 // StopHistoryTail stops the history tailing goroutine.
@@ -63,11 +64,15 @@ func (s *Server) StopHistoryTail() {
 	if s.historyStop != nil {
 		close(s.historyStop)
 	}
+	for _, ch := range s.historyStops {
+		close(ch)
+	}
+	s.historyStops = nil
 }
 
 // processHistoryLine handles a single new line from history.jsonl.
-func (s *Server) processHistoryLine(line []byte) {
-	update := data.ParseHistoryLine(line)
+func (s *Server) processHistoryLine(line []byte, source, rootDir string) {
+	update := data.ParseHistoryLineForSource(line, source, rootDir)
 	if update == nil {
 		return
 	}
@@ -87,8 +92,11 @@ func (s *Server) processHistoryLine(line []byte) {
 	if !found {
 		s.sessions = append(s.sessions, data.SessionSummary{
 			SessionID:    update.SessionID,
+			RawSessionID: update.RawSessionID,
+			Source:       update.Source,
+			DataDir:      update.DataDir,
 			Project:      update.Project,
-			ProjectName:  update.ProjectName,
+			ProjectName:  defaultProjectName(update.Source, update.ProjectName),
 			FirstMessage: update.Display,
 			FirstTS:      update.Timestamp,
 			LastTS:       update.Timestamp,
@@ -106,6 +114,13 @@ func (s *Server) processHistoryLine(line []byte) {
 	s.broadcast = make(chan struct{})
 	s.broadcastMu.Unlock()
 	close(ch)
+}
+
+func defaultProjectName(source, current string) string {
+	if current != "" {
+		return current
+	}
+	return source
 }
 
 // waitSessionUpdate returns a channel that closes on the next session update.
@@ -149,6 +164,8 @@ func (s *Server) Handler() http.Handler {
 
 type sessionJSON struct {
 	SessionID    string `json:"session_id"`
+	Source       string `json:"source"`
+	SourceColor  string `json:"source_color"`
 	Project      string `json:"project"`
 	ProjectName  string `json:"project_name"`
 	FilePath     string `json:"file_path,omitempty"`
@@ -237,7 +254,12 @@ func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSessionPath(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	path, err := data.FindTranscriptPath(s.claudeDir, id)
+	session, ok := s.findSession(id)
+	if !ok {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+	path, err := data.ResolveTranscriptPath(session)
 	if err != nil {
 		http.Error(w, "transcript not found", http.StatusNotFound)
 		return
@@ -261,8 +283,12 @@ func (s *Server) handleSessionPath(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-
-	path, err := data.FindTranscriptPath(s.claudeDir, id)
+	session, ok := s.findSession(id)
+	if !ok {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+	path, err := data.ResolveTranscriptPath(session)
 	if err != nil {
 		http.Error(w, "transcript not found", http.StatusNotFound)
 		return
@@ -295,8 +321,8 @@ func (s *Server) handleTranscript(w http.ResponseWriter, r *http.Request) {
 
 		rounds[i] = roundJSON{
 			Index:         rd.Index,
-			UserTimestamp:  rd.UserTimestamp,
-			IsContext:      rd.IsContext,
+			UserTimestamp: rd.UserTimestamp,
+			IsContext:     rd.IsContext,
 			Blocks:        blocks,
 			Usage: usageJSON{
 				InputTokens:   rd.Usage.InputTokens,
@@ -335,7 +361,7 @@ func (s *Server) handleExport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Load transcript.
-	path, err := data.FindTranscriptPath(s.claudeDir, req.SessionID)
+	path, err := data.ResolveTranscriptPath(session)
 	if err != nil {
 		http.Error(w, "transcript not found", http.StatusNotFound)
 		return
@@ -405,7 +431,7 @@ func (s *Server) handlePublish(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Load transcript.
-	path, err := data.FindTranscriptPath(s.claudeDir, req.SessionID)
+	path, err := data.ResolveTranscriptPath(session)
 	if err != nil {
 		http.Error(w, "transcript not found", http.StatusNotFound)
 		return
@@ -499,6 +525,8 @@ func (s *Server) buildSessionList() []sessionJSON {
 	for i, sess := range s.sessions {
 		result[i] = sessionJSON{
 			SessionID:    sess.SessionID,
+			Source:       sess.Source,
+			SourceColor:  data.SourceTitleColor(sess.Source),
 			Project:      sess.Project,
 			ProjectName:  sess.ProjectName,
 			FilePath:     sess.FilePath,
@@ -520,7 +548,12 @@ func (s *Server) handleTranscriptStream(w http.ResponseWriter, r *http.Request) 
 	}
 
 	id := r.PathValue("id")
-	path, err := data.FindTranscriptPath(s.claudeDir, id)
+	session, ok := s.findSession(id)
+	if !ok {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+	path, err := data.ResolveTranscriptPath(session)
 	if err != nil {
 		http.Error(w, "transcript not found", http.StatusNotFound)
 		return
@@ -539,7 +572,13 @@ func (s *Server) handleTranscriptStream(w http.ResponseWriter, r *http.Request) 
 
 	// Tail from beginning -- backlog + live.
 	lines := data.TailFile(path, 0, stopCh)
-	streamer := data.NewTranscriptStreamer()
+	var claudeStreamer *data.TranscriptStreamer
+	var codexStreamer *data.CodexTranscriptStreamer
+	if session.Source == data.SourceCodex {
+		codexStreamer = data.NewCodexTranscriptStreamer()
+	} else {
+		claudeStreamer = data.NewTranscriptStreamer()
+	}
 
 	// Per-round cumulative usage for aggregation.
 	roundUsage := make(map[int]*sseUsageEvent)
@@ -558,13 +597,29 @@ func (s *Server) handleTranscriptStream(w http.ResponseWriter, r *http.Request) 
 			if !ok {
 				return
 			}
-			ev := streamer.ProcessLine(line)
+			var ev *data.StreamEvent
+			if codexStreamer != nil {
+				ev = codexStreamer.ProcessLine(line)
+			} else {
+				ev = claudeStreamer.ProcessLine(line)
+			}
 			if ev == nil {
 				continue
 			}
 			s.sendStreamEvent(w, flusher, ev, roundUsage)
 		}
 	}
+}
+
+func (s *Server) findSession(id string) (data.SessionSummary, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, sess := range s.sessions {
+		if sess.SessionID == id {
+			return sess, true
+		}
+	}
+	return data.SessionSummary{}, false
 }
 
 func (s *Server) sendStreamEvent(w http.ResponseWriter, flusher http.Flusher, ev *data.StreamEvent, roundUsage map[int]*sseUsageEvent) {

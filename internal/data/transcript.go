@@ -43,6 +43,10 @@ type contentBlock struct {
 
 // LoadTranscript parses a transcript JSONL file into rounds with blocks in file order.
 func LoadTranscript(path string) (*Transcript, error) {
+	if isCodexTranscript(path) {
+		return LoadCodexTranscript(path)
+	}
+
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -86,6 +90,29 @@ func LoadTranscript(path string) (*Transcript, error) {
 	return t, nil
 }
 
+func isCodexTranscript(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), 64*1024)
+	for i := 0; i < 5 && scanner.Scan(); i++ {
+		line := scanner.Text()
+		if strings.Contains(line, `"type":"session_meta"`) ||
+			strings.Contains(line, `"type":"response_item"`) ||
+			strings.Contains(line, `"type":"event_msg"`) {
+			return true
+		}
+		if strings.Contains(line, `"sessionId"`) && strings.Contains(line, `"type":"user"`) {
+			return false
+		}
+	}
+	return false
+}
+
 // handleUserEntry processes a user-type transcript entry.
 // Returns the current round pointer (may be new or existing).
 func handleUserEntry(t *Transcript, entry *transcriptEntry, currentRound *Round, roundIndex *int) *Round {
@@ -116,8 +143,8 @@ func handleUserEntry(t *Transcript, entry *transcriptEntry, currentRound *Round,
 		}
 		r := Round{
 			Index:         *roundIndex,
-			UserTimestamp:  entry.Timestamp,
-			IsContext:      isCtx,
+			UserTimestamp: entry.Timestamp,
+			IsContext:     isCtx,
 			Blocks:        []Block{{Role: role, Text: text}},
 		}
 		*roundIndex++

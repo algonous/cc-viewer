@@ -25,10 +25,10 @@ func TestLoadSessions(t *testing.T) {
 	}
 
 	// Most recent first (bbb has timestamp 3000).
-	if sessions[0].SessionID != "bbb" {
+	if sessions[0].SessionID != "claude:bbb" {
 		t.Errorf("expected bbb first, got %s", sessions[0].SessionID)
 	}
-	if sessions[1].SessionID != "aaa" {
+	if sessions[1].SessionID != "claude:aaa" {
 		t.Errorf("expected aaa second, got %s", sessions[1].SessionID)
 	}
 

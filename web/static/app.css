@@ -106,7 +106,7 @@ html, body {
 }
 
 .session-project {
-  color: #1e40af;
+  color: var(--text);
   font-weight: bold;
   font-size: 13px;
 }
@@ -431,6 +431,16 @@ html, body {
   color: #1e40af;
 }
 
+/* CODEX / AGENT -- teal */
+.chat-codex {
+  border-left-color: #14b8a6;
+  background: #f0fdfa;
+}
+
+.chat-codex .chat-role {
+  color: #0f766e;
+}
+
 /* TOOL -- green */
 .chat-tool {
   border-left-color: #22c55e;
@@ -474,6 +484,7 @@ html, body {
 .block-group-context { border-left-color: #a78bfa; background: #f5f3ff; }
 .block-group-you { border-left-color: #d97706; background: #fefce8; }
 .block-group-claude { border-left-color: #3b82f6; background: #eff6ff; }
+.block-group-codex { border-left-color: #14b8a6; background: #f0fdfa; }
 .group-header {
   display: flex;
   align-items: center;
@@ -492,6 +503,7 @@ html, body {
 .block-group-context .group-header .chat-role { color: #5b21b6; }
 .block-group-you .group-header .chat-role { color: #854d0e; }
 .block-group-claude .group-header .chat-role { color: #1e40af; }
+.block-group-codex .group-header .chat-role { color: #0f766e; }
 
 /* --- Tool list (structured, not from markdown) --- */
 .tool-list {

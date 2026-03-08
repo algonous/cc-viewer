@@ -2,7 +2,10 @@ package data
 
 // SessionSummary is derived from history.jsonl by grouping entries by SessionID.
 type SessionSummary struct {
-	SessionID    string
+	SessionID    string // unique key: "<source>:<raw-id>"
+	RawSessionID string // source-native session id
+	Source       string // "claude" or "codex"
+	DataDir      string // root directory for this source (e.g. ~/.claude)
 	Project      string
 	ProjectName  string
 	FilePath     string // absolute path to the session JSONL file

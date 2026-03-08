@@ -16,7 +16,23 @@ Builds to `~/.local/bin/cc-viewer` by default. Override with `BIN=/your/path mak
 ## Usage
 
 ```
-cc-viewer [--claude-dir ~/.claude] [--addr 127.0.0.1:0]
+cc-viewer [--addr 127.0.0.1:0]
+```
+
+By default, `cc-viewer` auto-discovers all supported agent history roots under `$HOME`
+(for example `~/.claude`, `~/.codex`) and shows them together.
+
+Optional override:
+
+```
+cc-viewer --data-dirs ~/.claude,~/.codex
+```
+
+Legacy single-root mode (still supported):
+
+```
+cc-viewer --claude-dir ~/.claude
+cc-viewer --claude-dir ~/.codex
 ```
 
 Starts a local HTTP server and prints the URL. Open in a browser.
@@ -59,9 +75,13 @@ Each round header shows compact token counts:
 
 ## Data sources
 
-Reads from `~/.claude/`:
-- `history.jsonl` -- session index (grouped by sessionId)
-- `projects/<encoded-dir>/<sessionId>.jsonl` -- full transcripts
+Reads from both roots by default:
+- `~/.claude/`
+  - `history.jsonl` -- session index (grouped by sessionId)
+  - `projects/<encoded-dir>/<sessionId>.jsonl` -- full transcripts
+- `~/.codex/`
+  - `history.jsonl` -- session index (grouped by session_id)
+  - `sessions/YYYY/MM/DD/rollout-*.jsonl` -- full transcripts
 
 ## Architecture
 
