@@ -84,6 +84,7 @@ func (s *Server) processHistoryLine(line []byte, source, rootDir string) {
 			if update.Timestamp > s.sessions[i].LastTS {
 				s.sessions[i].LastTS = update.Timestamp
 			}
+			s.sessions[i].AllMessages = appendSearchText(s.sessions[i].AllMessages, update.SearchText)
 			s.sessions[i].MessageCount++
 			found = true
 			break
@@ -98,6 +99,7 @@ func (s *Server) processHistoryLine(line []byte, source, rootDir string) {
 			Project:      update.Project,
 			ProjectName:  defaultProjectName(update.Source, update.ProjectName),
 			FirstMessage: update.Display,
+			AllMessages:  update.SearchText,
 			FirstTS:      update.Timestamp,
 			LastTS:       update.Timestamp,
 			MessageCount: 1,
@@ -121,6 +123,16 @@ func defaultProjectName(source, current string) string {
 		return current
 	}
 	return source
+}
+
+func appendSearchText(current, next string) string {
+	if next == "" {
+		return current
+	}
+	if current == "" {
+		return next
+	}
+	return current + "\n" + next
 }
 
 // waitSessionUpdate returns a channel that closes on the next session update.

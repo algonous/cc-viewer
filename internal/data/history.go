@@ -531,6 +531,7 @@ type SessionUpdate struct {
 	Project      string
 	ProjectName  string
 	Display      string
+	SearchText   string
 	Timestamp    int64
 }
 
@@ -542,6 +543,15 @@ func ParseHistoryLineForSource(line []byte, source, rootDir string) *SessionUpda
 		if err := json.Unmarshal(line, &e); err != nil || e.SessionID == "" {
 			return nil
 		}
+		var searchTexts []string
+		if e.Display != "" && e.Display != "exit" {
+			searchTexts = append(searchTexts, e.Display)
+		}
+		for _, pc := range e.PastedContents {
+			if pc.Content != "" {
+				searchTexts = append(searchTexts, pc.Content)
+			}
+		}
 		return &SessionUpdate{
 			SessionID:    MakeSessionKey(SourceClaude, e.SessionID),
 			RawSessionID: e.SessionID,
@@ -550,6 +560,7 @@ func ParseHistoryLineForSource(line []byte, source, rootDir string) *SessionUpda
 			Project:      e.Project,
 			ProjectName:  projectName(e.Project),
 			Display:      e.Display,
+			SearchText:   strings.Join(searchTexts, "\n"),
 			Timestamp:    normalizeEpochMillis(e.Timestamp),
 		}
 	case SourceCodex:
@@ -563,6 +574,7 @@ func ParseHistoryLineForSource(line []byte, source, rootDir string) *SessionUpda
 			Source:       SourceCodex,
 			DataDir:      rootDir,
 			Display:      e.Text,
+			SearchText:   e.Text,
 			Timestamp:    normalizeEpochMillis(e.TS),
 		}
 	default:
