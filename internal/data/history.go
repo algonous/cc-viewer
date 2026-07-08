@@ -34,6 +34,11 @@ type codexHistoryEntry struct {
 	Text      string `json:"text"`
 }
 
+type codexSessionGroup struct {
+	s  *SessionSummary
+	ms []string
+}
+
 // LoadSessions keeps backward compatibility for single-root callers.
 func LoadSessions(rootDir string) ([]SessionSummary, error) {
 	source := sourceFromDir(rootDir)
@@ -88,11 +93,7 @@ func loadCodexSessions(codexDir string) ([]SessionSummary, error) {
 	defer f.Close()
 
 	transcriptBySID := findCodexTranscriptPaths(codexDir)
-	type group struct {
-		s  *SessionSummary
-		ms []string
-	}
-	groups := make(map[string]*group)
+	groups := make(map[string]*codexSessionGroup)
 	var order []string
 
 	scanner := bufio.NewScanner(f)
@@ -123,7 +124,7 @@ func loadCodexSessions(codexDir string) ([]SessionSummary, error) {
 			if s.ProjectName == "" {
 				s.ProjectName = SourceCodex
 			}
-			g = &group{s: &s}
+			g = &codexSessionGroup{s: &s}
 			groups[e.SessionID] = g
 			order = append(order, e.SessionID)
 		}
@@ -143,6 +144,8 @@ func loadCodexSessions(codexDir string) ([]SessionSummary, error) {
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
+
+	indexCodexTranscriptText(transcriptBySID, groups)
 
 	out := make([]SessionSummary, 0, len(order))
 	for _, sid := range order {
@@ -373,6 +376,129 @@ func orphanClaudeSessionFromTranscript(path, rawID, encodedProject, claudeDir st
 		s.FirstTS = s.LastTS
 	}
 	return s
+}
+
+func indexCodexTranscriptText(transcriptBySID map[string]string, groups map[string]*codexSessionGroup) {
+	type fileJob struct {
+		rawID string
+		path  string
+	}
+	var jobs []fileJob
+
+	for rawID, g := range groups {
+		path := transcriptBySID[rawID]
+		if path == "" {
+			continue
+		}
+		if g.s.FilePath == "" {
+			g.s.FilePath = path
+		}
+		jobs = append(jobs, fileJob{rawID: rawID, path: path})
+	}
+
+	type indexResult struct {
+		rawID string
+		texts []string
+	}
+	results := make(chan indexResult, len(jobs))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, runtime.NumCPU())
+
+	for _, job := range jobs {
+		wg.Add(1)
+		go func(j fileJob) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			texts := extractCodexTranscriptTexts(j.path)
+			if len(texts) > 0 {
+				results <- indexResult{rawID: j.rawID, texts: texts}
+			}
+		}(job)
+	}
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+	for r := range results {
+		groups[r.rawID].ms = append(groups[r.rawID].ms, r.texts...)
+	}
+}
+
+func extractCodexTranscriptTexts(path string) []string {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	var texts []string
+	seen := map[string]bool{}
+	addText := func(text string) {
+		if text == "" || seen[text] {
+			return
+		}
+		seen[text] = true
+		texts = append(texts, text)
+	}
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 4*1024*1024), 4*1024*1024)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if !bytes.Contains(line, []byte(`"type":"event_msg"`)) && !bytes.Contains(line, []byte(`"type":"response_item"`)) {
+			continue
+		}
+		var entry codexEntry
+		if json.Unmarshal(line, &entry) != nil {
+			continue
+		}
+		switch entry.Type {
+		case "event_msg":
+			var ev codexPayloadEvent
+			if json.Unmarshal(entry.Payload, &ev) != nil {
+				continue
+			}
+			switch ev.Type {
+			case "user_message", "agent_message":
+				addText(ev.Message)
+			}
+		case "response_item":
+			var ri codexPayloadResponseItem
+			if json.Unmarshal(entry.Payload, &ri) != nil || ri.Type != "message" {
+				continue
+			}
+			for _, text := range codexResponseItemTexts(&ri) {
+				addText(text)
+			}
+		}
+	}
+	return texts
+}
+
+func codexResponseItemTexts(ri *codexPayloadResponseItem) []string {
+	var texts []string
+	for _, c := range ri.Content {
+		switch c.Type {
+		case "input_text":
+			if c.InputText != "" {
+				texts = append(texts, c.InputText)
+			} else if c.Text != "" {
+				texts = append(texts, c.Text)
+			}
+		case "output_text":
+			if c.OutputText != "" {
+				texts = append(texts, c.OutputText)
+			} else if c.Text != "" {
+				texts = append(texts, c.Text)
+			}
+		case "text":
+			if c.Text != "" {
+				texts = append(texts, c.Text)
+			}
+		}
+	}
+	return texts
 }
 
 func indexClaudeTranscriptText(claudeDir string, groups map[string]*SessionSummary, messages map[string][]string) {

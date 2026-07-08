@@ -84,6 +84,53 @@ func TestLoadSessionsMalformedLines(t *testing.T) {
 	}
 }
 
+func TestLoadCodexSessionsIndexesTranscriptText(t *testing.T) {
+	dir := t.TempDir()
+	rawID := "11111111-2222-3333-4444-555555555555"
+	history := `{"session_id":"` + rawID + `","ts":1783490710,"text":"history user text"}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "history.jsonl"), []byte(history), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	sessionDir := filepath.Join(dir, "sessions", "2026", "07", "08")
+	if err := os.MkdirAll(sessionDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	transcriptPath := filepath.Join(sessionDir, "rollout-2026-07-08T00-00-00-"+rawID+".jsonl")
+	transcript := `{"timestamp":"2026-07-08T00:00:00Z","type":"session_meta","payload":{"cwd":"/Users/kfu/code/foo"}}
+{"timestamp":"2026-07-08T00:00:01Z","type":"event_msg","payload":{"type":"user_message","message":"history user text"}}
+{"timestamp":"2026-07-08T00:00:02Z","type":"event_msg","payload":{"type":"agent_message","message":"assistant searchable phrase"}}
+{"timestamp":"2026-07-08T00:00:03Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"response item only phrase"}]}}
+{"timestamp":"2026-07-08T00:00:04Z","type":"response_item","payload":{"type":"function_call_output","output":"tool output should stay out"}}
+`
+	if err := os.WriteFile(transcriptPath, []byte(transcript), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := loadCodexSessions(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(sessions))
+	}
+	s := sessions[0]
+	if s.ProjectName != "foo" {
+		t.Fatalf("ProjectName = %q, want foo", s.ProjectName)
+	}
+	if s.FilePath != transcriptPath {
+		t.Fatalf("FilePath = %q, want %q", s.FilePath, transcriptPath)
+	}
+	for _, want := range []string{"history user text", "assistant searchable phrase", "response item only phrase"} {
+		if !strings.Contains(s.AllMessages, want) {
+			t.Fatalf("AllMessages missing %q: %q", want, s.AllMessages)
+		}
+	}
+	if strings.Contains(s.AllMessages, "tool output should stay out") {
+		t.Fatalf("AllMessages indexed tool output: %q", s.AllMessages)
+	}
+}
+
 func TestProjectName(t *testing.T) {
 	tests := []struct {
 		input string
