@@ -149,16 +149,19 @@ func TestGenerateMarkdownAll(t *testing.T) {
 		"```prompt\nhello\n```",
 		"```thinking\nlet me think about this\n```",
 		"```tool_use\nRead: /foo/bar.go\n```",
-		"```assistant\nHi there!\n```",
-		"```assistant\nHow can I help?\n```",
+		"### Assistant\n\nHi there!",
+		"### Assistant\n\nHow can I help?",
 		"## Round 2 (2026-02-26T11:01:00Z)",
 		"```prompt\nfix bug\n```",
-		"```assistant\nDone!\n```",
+		"### Assistant\n\nDone!",
 	}
 	for _, check := range checks {
 		if !strings.Contains(content, check) {
 			t.Errorf("markdown missing: %q", check)
 		}
+	}
+	if strings.Contains(content, "```assistant") {
+		t.Errorf("assistant markdown should not be fenced:\n%s", content)
 	}
 }
 
@@ -178,8 +181,11 @@ func TestGenerateMarkdownSelectedBlocks(t *testing.T) {
 	if !strings.Contains(content, "```prompt\nhello\n```") {
 		t.Error("should contain prompt block")
 	}
-	if !strings.Contains(content, "```assistant\nHi there!\n```") {
+	if !strings.Contains(content, "### Assistant\n\nHi there!") {
 		t.Error("should contain assistant block")
+	}
+	if strings.Contains(content, "```assistant") {
+		t.Error("assistant block should not be fenced")
 	}
 
 	// Thinking and tool should NOT be present (not selected).
@@ -191,7 +197,7 @@ func TestGenerateMarkdownSelectedBlocks(t *testing.T) {
 	}
 
 	// Round 2: only claude.
-	if !strings.Contains(content, "```assistant\nDone!\n```") {
+	if !strings.Contains(content, "### Assistant\n\nDone!") {
 		t.Error("should contain Done assistant block")
 	}
 	if strings.Contains(content, "```prompt\nfix bug\n```") {
@@ -246,7 +252,7 @@ func TestGenerateMarkdownMergesConsecutiveTools(t *testing.T) {
 	}
 }
 
-func TestGenerateMarkdownEscapesBackticks(t *testing.T) {
+func TestGenerateMarkdownRendersAssistantMarkdown(t *testing.T) {
 	session := SessionSummary{SessionID: "s1", Project: "/foo"}
 	transcript := &Transcript{
 		SessionID: "s1",
@@ -260,10 +266,33 @@ func TestGenerateMarkdownEscapesBackticks(t *testing.T) {
 	}
 	content := string(GenerateMarkdown(session, transcript, nil))
 
-	// The outer fence must use 4 backticks since content has triple backticks.
-	want := "````assistant\nHere is code:\n```go\nfmt.Println(\"hi\")\n```\nDone.\n````"
+	want := "### Assistant\n\nHere is code:\n```go\nfmt.Println(\"hi\")\n```\nDone."
 	if !strings.Contains(content, want) {
-		t.Errorf("expected escaped fence, got:\n%s", content)
+		t.Errorf("expected rendered assistant markdown, got:\n%s", content)
+	}
+	if strings.Contains(content, "```assistant") || strings.Contains(content, "````assistant") {
+		t.Errorf("assistant markdown should not be fenced:\n%s", content)
+	}
+}
+
+func TestGenerateMarkdownEscapesPromptBackticks(t *testing.T) {
+	session := SessionSummary{SessionID: "s1", Project: "/foo"}
+	transcript := &Transcript{
+		SessionID: "s1",
+		Rounds: []Round{{
+			Index:         0,
+			UserTimestamp: "2026-02-26T11:00:00Z",
+			Blocks: []Block{
+				{Role: "you", Text: "Here is code:\n```go\nfmt.Println(\"hi\")\n```\nDone."},
+			},
+		}},
+	}
+	content := string(GenerateMarkdown(session, transcript, nil))
+
+	// The outer fence must use 4 backticks since content has triple backticks.
+	want := "````prompt\nHere is code:\n```go\nfmt.Println(\"hi\")\n```\nDone.\n````"
+	if !strings.Contains(content, want) {
+		t.Errorf("expected escaped prompt fence, got:\n%s", content)
 	}
 }
 

@@ -194,10 +194,16 @@ Bash: ls -la
 chain of thought
 ` ``
 
-` ``assistant
-response text
-` ``
+### Assistant
+
+response text with **markdown** rendered by the host
 ```
+
+Prompt/context, tool, and thinking blocks are fenced because they are exported
+as literal transcript content. Assistant blocks are not fenced because assistant
+responses are already Markdown and should render as Markdown in hosts such as
+GitLab snippets. Each assistant block is introduced with `### Assistant` to keep
+block boundaries visible without disabling Markdown rendering.
 
 Rounds that have no selected blocks are omitted entirely.
 

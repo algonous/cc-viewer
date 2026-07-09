@@ -134,12 +134,21 @@ func writeMarkdownBlock(buf *strings.Builder, b Block) {
 	case "thinking":
 		tag = "thinking"
 	case "claude":
-		tag = "assistant"
+		writeAssistantMarkdownBlock(buf, b.Text)
+		return
 	default:
 		return
 	}
 	fence := makeFence(b.Text)
 	fmt.Fprintf(buf, "%s%s\n%s\n%s\n\n", fence, tag, b.Text, fence)
+}
+
+func writeAssistantMarkdownBlock(buf *strings.Builder, text string) {
+	fmt.Fprintf(buf, "### Assistant\n\n%s", text)
+	if !strings.HasSuffix(text, "\n") {
+		buf.WriteString("\n")
+	}
+	buf.WriteString("\n")
 }
 
 // makeFence returns a backtick fence that is longer than any backtick

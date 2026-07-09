@@ -107,7 +107,7 @@ Click the checkbox on any block to select it. Selected blocks show a cyan outlin
 Click the **Export** button in the viewer toolbar. Choose format:
 
 - **JSONL** -- structured data, one JSON line per round
-- **Markdown** -- readable markdown with fenced code blocks
+- **Markdown** -- readable markdown; prompts, tools, and thinking stay fenced while assistant responses render as markdown
 
 Exports download directly to your browser's default download folder.
 
