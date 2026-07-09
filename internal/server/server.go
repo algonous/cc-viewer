@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -27,8 +28,7 @@ type Server struct {
 	broadcastMu sync.Mutex
 	broadcast   chan struct{}
 
-	historyStop  chan struct{}
-	historyStops []chan struct{}
+	historyStop chan struct{}
 }
 
 // New creates a new Server.
@@ -41,21 +41,22 @@ func New(roots []data.SourceRoot, sessions []data.SessionSummary, webFS fs.FS) *
 	}
 }
 
-// StartHistoryTail begins tailing history.jsonl for new session events.
-// Existing content was already loaded at startup; this tails from the end.
+// StartHistoryTail begins tailing history.jsonl and Codex rollout files.
+// Existing content was already loaded at startup; known files tail from the end.
 func (s *Server) StartHistoryTail() {
 	s.historyStop = make(chan struct{})
 	for _, root := range s.roots {
 		historyPath := root.Dir + "/history.jsonl"
 		offset, _ := data.FileSize(historyPath)
-		stop := make(chan struct{})
-		s.historyStops = append(s.historyStops, stop)
-		lines := data.TailFile(historyPath, offset, stop)
+		lines := data.TailFile(historyPath, offset, s.historyStop)
 		go func(source, dir string, ch <-chan []byte) {
 			for line := range ch {
 				s.processHistoryLine(line, source, dir)
 			}
 		}(root.Source, root.Dir, lines)
+		if root.Source == data.SourceCodex {
+			s.startCodexTranscriptSearchTails(root.Dir, s.historyStop)
+		}
 	}
 }
 
@@ -63,11 +64,8 @@ func (s *Server) StartHistoryTail() {
 func (s *Server) StopHistoryTail() {
 	if s.historyStop != nil {
 		close(s.historyStop)
+		s.historyStop = nil
 	}
-	for _, ch := range s.historyStops {
-		close(ch)
-	}
-	s.historyStops = nil
 }
 
 // processHistoryLine handles a single new line from history.jsonl.
@@ -110,12 +108,7 @@ func (s *Server) processHistoryLine(line []byte, source, rootDir string) {
 	})
 	s.mu.Unlock()
 
-	// Wake all session stream subscribers.
-	s.broadcastMu.Lock()
-	ch := s.broadcast
-	s.broadcast = make(chan struct{})
-	s.broadcastMu.Unlock()
-	close(ch)
+	s.notifySessionUpdate()
 }
 
 func defaultProjectName(source, current string) string {
@@ -126,13 +119,189 @@ func defaultProjectName(source, current string) string {
 }
 
 func appendSearchText(current, next string) string {
+	updated, _ := appendSearchTextChanged(current, next)
+	return updated
+}
+
+func appendSearchTextChanged(current, next string) (string, bool) {
 	if next == "" {
-		return current
+		return current, false
+	}
+	seen := make(map[string]bool)
+	for _, line := range strings.Split(current, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			seen[line] = true
+		}
+	}
+	var additions []string
+	for _, line := range strings.Split(next, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || seen[line] {
+			continue
+		}
+		seen[line] = true
+		additions = append(additions, line)
+	}
+	if len(additions) == 0 {
+		return current, false
 	}
 	if current == "" {
-		return next
+		return strings.Join(additions, "\n"), true
 	}
-	return current + "\n" + next
+	return current + "\n" + strings.Join(additions, "\n"), true
+}
+
+func (s *Server) startCodexTranscriptSearchTails(codexDir string, stop <-chan struct{}) {
+	seen := make(map[string]bool)
+
+	s.mu.RLock()
+	for _, sess := range s.sessions {
+		if sess.Source != data.SourceCodex || sess.DataDir != codexDir || sess.FilePath == "" {
+			continue
+		}
+		if seen[sess.FilePath] {
+			continue
+		}
+		seen[sess.FilePath] = true
+		offset, _ := data.FileSize(sess.FilePath)
+		go s.tailCodexTranscriptSearch(sess.RawSessionID, sess.FilePath, codexDir, offset, stop)
+	}
+	s.mu.RUnlock()
+
+	go func() {
+		discover := func() {
+			for rawID, path := range data.FindCodexTranscriptPaths(codexDir) {
+				if path == "" || seen[path] {
+					continue
+				}
+				seen[path] = true
+				go s.tailCodexTranscriptSearch(rawID, path, codexDir, 0, stop)
+			}
+		}
+		discover()
+
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				discover()
+			}
+		}
+	}()
+}
+
+func (s *Server) tailCodexTranscriptSearch(rawID, path, codexDir string, offset int64, stop <-chan struct{}) {
+	lines := data.TailFile(path, offset, stop)
+	project := ""
+	for line := range lines {
+		update := data.ParseCodexTranscriptIndexLine(line)
+		if update.Project != "" {
+			project = update.Project
+		}
+		s.processCodexTranscriptIndexUpdate(rawID, path, codexDir, project, update)
+	}
+}
+
+func (s *Server) processCodexTranscriptIndexUpdate(rawID, path, codexDir, project string, update data.CodexTranscriptIndexUpdate) {
+	searchText := strings.Join(update.SearchTexts, "\n")
+	if searchText == "" && project == "" {
+		return
+	}
+
+	id := data.MakeSessionKey(data.SourceCodex, rawID)
+	found := false
+	changed := false
+
+	s.mu.Lock()
+	for i := range s.sessions {
+		if s.sessions[i].SessionID != id {
+			continue
+		}
+		found = true
+		if s.sessions[i].RawSessionID == "" {
+			s.sessions[i].RawSessionID = rawID
+			changed = true
+		}
+		if s.sessions[i].DataDir == "" {
+			s.sessions[i].DataDir = codexDir
+			changed = true
+		}
+		if s.sessions[i].FilePath != path {
+			s.sessions[i].FilePath = path
+			changed = true
+		}
+		if project != "" && s.sessions[i].Project != project {
+			s.sessions[i].Project = project
+			s.sessions[i].ProjectName = projectNameFromPath(project)
+			changed = true
+		}
+		if s.sessions[i].FirstMessage == "" && update.FirstText != "" {
+			s.sessions[i].FirstMessage = update.FirstText
+			changed = true
+		}
+		if update.Timestamp > 0 {
+			if s.sessions[i].FirstTS == 0 || update.Timestamp < s.sessions[i].FirstTS {
+				s.sessions[i].FirstTS = update.Timestamp
+				changed = true
+			}
+			if update.Timestamp > s.sessions[i].LastTS {
+				s.sessions[i].LastTS = update.Timestamp
+				changed = true
+			}
+		}
+		if next, ok := appendSearchTextChanged(s.sessions[i].AllMessages, searchText); ok {
+			s.sessions[i].AllMessages = next
+			changed = true
+		}
+		break
+	}
+	if !found && searchText != "" {
+		firstTS := update.Timestamp
+		s.sessions = append(s.sessions, data.SessionSummary{
+			SessionID:    id,
+			RawSessionID: rawID,
+			Source:       data.SourceCodex,
+			DataDir:      codexDir,
+			Project:      project,
+			ProjectName:  defaultProjectName(data.SourceCodex, projectNameFromPath(project)),
+			FilePath:     path,
+			FirstMessage: update.FirstText,
+			AllMessages:  searchText,
+			FirstTS:      firstTS,
+			LastTS:       firstTS,
+			MessageCount: 1,
+		})
+		changed = true
+	}
+	if changed {
+		sort.Slice(s.sessions, func(i, j int) bool {
+			return s.sessions[i].LastTS > s.sessions[j].LastTS
+		})
+	}
+	s.mu.Unlock()
+
+	if changed {
+		s.notifySessionUpdate()
+	}
+}
+
+func projectNameFromPath(project string) string {
+	if project == "" {
+		return ""
+	}
+	return filepath.Base(strings.TrimRight(project, "/"))
+}
+
+func (s *Server) notifySessionUpdate() {
+	s.broadcastMu.Lock()
+	ch := s.broadcast
+	s.broadcast = make(chan struct{})
+	s.broadcastMu.Unlock()
+	close(ch)
 }
 
 // waitSessionUpdate returns a channel that closes on the next session update.

@@ -1,8 +1,12 @@
 package server
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/algonous/agent-sessions/internal/data"
 )
@@ -69,6 +73,49 @@ func TestProcessHistoryLineIndexesClaudePastedContents(t *testing.T) {
 	}
 }
 
+func TestStartHistoryTailIndexesLiveCodexTranscript(t *testing.T) {
+	dir := t.TempDir()
+	rawID := "11111111-2222-3333-4444-555555555555"
+	history := `{"session_id":"` + rawID + `","ts":1783490710,"text":"history user text"}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "history.jsonl"), []byte(history), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	sessionDir := filepath.Join(dir, "sessions", "2026", "07", "08")
+	if err := os.MkdirAll(sessionDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	transcriptPath := filepath.Join(sessionDir, "rollout-2026-07-08T00-00-00-"+rawID+".jsonl")
+	transcript := `{"timestamp":"2026-07-08T00:00:00Z","type":"session_meta","payload":{"cwd":"/tmp/live-codex"}}
+{"timestamp":"2026-07-08T00:00:01Z","type":"event_msg","payload":{"type":"user_message","message":"history user text"}}
+`
+	if err := os.WriteFile(transcriptPath, []byte(transcript), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := data.LoadSessionsMulti([]data.SourceRoot{{Source: data.SourceCodex, Dir: dir}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := New([]data.SourceRoot{{Source: data.SourceCodex, Dir: dir}}, sessions, nil)
+	srv.StartHistoryTail()
+	defer srv.StopHistoryTail()
+
+	f, err := os.OpenFile(transcriptPath, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = fmt.Fprintln(f, `{"timestamp":"2026-07-08T00:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"live **needle** phrase"}]}}`)
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	waitForSessionText(t, srv, data.MakeSessionKey(data.SourceCodex, rawID), "live needle phrase")
+}
+
 func findSessionJSON(t *testing.T, sessions []sessionJSON, id string) sessionJSON {
 	t.Helper()
 	for _, sess := range sessions {
@@ -78,4 +125,25 @@ func findSessionJSON(t *testing.T, sessions []sessionJSON, id string) sessionJSO
 	}
 	t.Fatalf("session %s not found in %+v", id, sessions)
 	return sessionJSON{}
+}
+
+func waitForSessionText(t *testing.T, srv *Server, id, want string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		srv.mu.RLock()
+		sessions := srv.buildSessionList()
+		srv.mu.RUnlock()
+		sess := findSessionJSON(t, sessions, id)
+		if strings.Contains(sess.AllMessages, want) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	srv.mu.RLock()
+	sessions := srv.buildSessionList()
+	srv.mu.RUnlock()
+	sess := findSessionJSON(t, sessions, id)
+	t.Fatalf("AllMessages missing %q: %q", want, sess.AllMessages)
 }

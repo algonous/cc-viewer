@@ -41,6 +41,14 @@ type codexSessionGroup struct {
 	ms []string
 }
 
+// CodexTranscriptIndexUpdate is search metadata extracted from one rollout JSONL line.
+type CodexTranscriptIndexUpdate struct {
+	SearchTexts []string
+	FirstText   string
+	Project     string
+	Timestamp   int64
+}
+
 // LoadSessions keeps backward compatibility for single-root callers.
 func LoadSessions(rootDir string) ([]SessionSummary, error) {
 	source := sourceFromDir(rootDir)
@@ -184,6 +192,11 @@ func findCodexTranscriptPaths(codexDir string) map[string]string {
 		return nil
 	})
 	return result
+}
+
+// FindCodexTranscriptPaths returns the latest rollout JSONL path per Codex session id.
+func FindCodexTranscriptPaths(codexDir string) map[string]string {
+	return findCodexTranscriptPaths(codexDir)
 }
 
 func codexProjectFromTranscript(path string) string {
@@ -436,47 +449,81 @@ func extractCodexTranscriptTexts(path string) []string {
 
 	var texts []string
 	seen := map[string]bool{}
-	addText := func(text string) {
-		text = searchIndexText(text)
-		if text == "" || seen[text] {
-			return
-		}
-		seen[text] = true
-		texts = append(texts, text)
-	}
 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 4*1024*1024), 4*1024*1024)
 	for scanner.Scan() {
 		line := scanner.Bytes()
-		if !bytes.Contains(line, []byte(`"type":"event_msg"`)) && !bytes.Contains(line, []byte(`"type":"response_item"`)) {
-			continue
-		}
-		var entry codexEntry
-		if json.Unmarshal(line, &entry) != nil {
-			continue
-		}
-		switch entry.Type {
-		case "event_msg":
-			var ev codexPayloadEvent
-			if json.Unmarshal(entry.Payload, &ev) != nil {
+		update := ParseCodexTranscriptIndexLine(line)
+		for _, text := range update.SearchTexts {
+			if text == "" || seen[text] {
 				continue
 			}
-			switch ev.Type {
-			case "user_message", "agent_message":
-				addText(ev.Message)
-			}
-		case "response_item":
-			var ri codexPayloadResponseItem
-			if json.Unmarshal(entry.Payload, &ri) != nil || ri.Type != "message" {
-				continue
-			}
-			for _, text := range codexResponseItemTexts(&ri) {
-				addText(text)
-			}
+			seen[text] = true
+			texts = append(texts, text)
 		}
 	}
 	return texts
+}
+
+// ParseCodexTranscriptIndexLine extracts live search metadata from one Codex rollout line.
+func ParseCodexTranscriptIndexLine(line []byte) CodexTranscriptIndexUpdate {
+	var update CodexTranscriptIndexUpdate
+	if !bytes.Contains(line, []byte(`"type":"event_msg"`)) &&
+		!bytes.Contains(line, []byte(`"type":"response_item"`)) &&
+		!bytes.Contains(line, []byte(`"type":"session_meta"`)) &&
+		!bytes.Contains(line, []byte(`"type":"turn_context"`)) {
+		return update
+	}
+
+	var entry codexEntry
+	if json.Unmarshal(line, &entry) != nil {
+		return update
+	}
+	if entry.Timestamp != "" {
+		if ts, err := parseTimestamp(entry.Timestamp); err == nil {
+			update.Timestamp = ts
+		}
+	}
+
+	addText := func(text string) {
+		searchText := searchIndexText(text)
+		if searchText == "" {
+			return
+		}
+		if update.FirstText == "" {
+			update.FirstText = text
+		}
+		update.SearchTexts = append(update.SearchTexts, searchText)
+	}
+
+	switch entry.Type {
+	case "session_meta", "turn_context":
+		var payload struct {
+			Cwd string `json:"cwd"`
+		}
+		if json.Unmarshal(entry.Payload, &payload) == nil {
+			update.Project = payload.Cwd
+		}
+	case "event_msg":
+		var ev codexPayloadEvent
+		if json.Unmarshal(entry.Payload, &ev) != nil {
+			return update
+		}
+		switch ev.Type {
+		case "user_message", "agent_message":
+			addText(ev.Message)
+		}
+	case "response_item":
+		var ri codexPayloadResponseItem
+		if json.Unmarshal(entry.Payload, &ri) != nil || ri.Type != "message" {
+			return update
+		}
+		for _, text := range codexResponseItemTexts(&ri) {
+			addText(text)
+		}
+	}
+	return update
 }
 
 func codexResponseItemTexts(ri *codexPayloadResponseItem) []string {
