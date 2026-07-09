@@ -99,8 +99,8 @@ func TestLoadCodexSessionsIndexesTranscriptText(t *testing.T) {
 	transcriptPath := filepath.Join(sessionDir, "rollout-2026-07-08T00-00-00-"+rawID+".jsonl")
 	transcript := `{"timestamp":"2026-07-08T00:00:00Z","type":"session_meta","payload":{"cwd":"/Users/kfu/code/foo"}}
 {"timestamp":"2026-07-08T00:00:01Z","type":"event_msg","payload":{"type":"user_message","message":"history user text"}}
-{"timestamp":"2026-07-08T00:00:02Z","type":"event_msg","payload":{"type":"agent_message","message":"assistant searchable phrase"}}
-{"timestamp":"2026-07-08T00:00:03Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"response item only phrase"}]}}
+{"timestamp":"2026-07-08T00:00:02Z","type":"event_msg","payload":{"type":"agent_message","message":"assistant **searchable** phrase"}}
+{"timestamp":"2026-07-08T00:00:03Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"response item **only** phrase"}]}}
 {"timestamp":"2026-07-08T00:00:04Z","type":"response_item","payload":{"type":"function_call_output","output":"tool output should stay out"}}
 `
 	if err := os.WriteFile(transcriptPath, []byte(transcript), 0644); err != nil {
@@ -126,8 +126,21 @@ func TestLoadCodexSessionsIndexesTranscriptText(t *testing.T) {
 			t.Fatalf("AllMessages missing %q: %q", want, s.AllMessages)
 		}
 	}
+	for _, raw := range []string{"**searchable**", "**only**"} {
+		if strings.Contains(s.AllMessages, raw) {
+			t.Fatalf("AllMessages indexed raw markdown %q: %q", raw, s.AllMessages)
+		}
+	}
 	if strings.Contains(s.AllMessages, "tool output should stay out") {
 		t.Fatalf("AllMessages indexed tool output: %q", s.AllMessages)
+	}
+}
+
+func TestSearchIndexTextRendersMarkdown(t *testing.T) {
+	got := searchIndexText("So it's **not CPU** and `still bootstrapping`.\n\nVisit [docs](https://example.com).")
+	want := "so it's not cpu and still bootstrapping. visit docs."
+	if got != want {
+		t.Fatalf("searchIndexText = %q, want %q", got, want)
 	}
 }
 

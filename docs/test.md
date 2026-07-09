@@ -57,7 +57,7 @@ Feed mock JSONL strings, verify output events.
 - Extracts user message text
 - Extracts assistant text blocks
 - Skips thinking and tool_use content
-- Does not render markdown
+- Converts markdown to rendered plain search text
 
 ### Web layer (SSE)
 

@@ -31,7 +31,7 @@ func TestProcessHistoryLineMaintainsSearchText(t *testing.T) {
 	if !strings.Contains(existing.AllMessages, "old message") {
 		t.Fatalf("existing AllMessages lost old text: %q", existing.AllMessages)
 	}
-	if !strings.Contains(existing.AllMessages, "Glue AccessDenied latest update") {
+	if !strings.Contains(existing.AllMessages, "glue accessdenied latest update") {
 		t.Fatalf("existing AllMessages missing live text: %q", existing.AllMessages)
 	}
 	if existing.MessageCount != 2 {
@@ -45,14 +45,14 @@ func TestProcessHistoryLineMaintainsSearchText(t *testing.T) {
 	if created.FirstMessage != "new Glue AccessDenied session" {
 		t.Fatalf("created FirstMessage = %q", created.FirstMessage)
 	}
-	if created.AllMessages != "new Glue AccessDenied session" {
+	if created.AllMessages != "new glue accessdenied session" {
 		t.Fatalf("created AllMessages = %q", created.AllMessages)
 	}
 }
 
 func TestProcessHistoryLineIndexesClaudePastedContents(t *testing.T) {
 	srv := New(nil, nil, nil)
-	line := []byte(`{"sessionId":"c1","timestamp":1000,"project":"/tmp/proj","display":"please inspect","pastedContents":{"a":{"content":"pasted Glue AccessDenied log"}}}`)
+	line := []byte(`{"sessionId":"c1","timestamp":1000,"project":"/tmp/proj","display":"please **inspect**","pastedContents":{"a":{"content":"pasted Glue AccessDenied log"}}}`)
 
 	srv.processHistoryLine(line, data.SourceClaude, "/tmp/claude")
 
@@ -64,7 +64,7 @@ func TestProcessHistoryLineIndexesClaudePastedContents(t *testing.T) {
 	if !strings.Contains(created.AllMessages, "please inspect") {
 		t.Fatalf("created AllMessages missing display: %q", created.AllMessages)
 	}
-	if !strings.Contains(created.AllMessages, "pasted Glue AccessDenied log") {
+	if !strings.Contains(created.AllMessages, "pasted glue accessdenied log") {
 		t.Fatalf("created AllMessages missing pasted content: %q", created.AllMessages)
 	}
 }

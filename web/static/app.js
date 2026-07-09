@@ -355,15 +355,19 @@ function savePinnedSessions() {
   catch(e) {}
 }
 
+function normalizeSearchText(s) {
+  return (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
 function applyFilter() {
-  var text = state.filterText.toLowerCase();
+  var text = normalizeSearchText(state.filterText);
   if (!text) {
     state.filteredSessions = state.sessions.slice();
   } else {
     state.filteredSessions = state.sessions.filter(function(s) {
-      return (s.project_name && s.project_name.toLowerCase().indexOf(text) >= 0) ||
-        (s.project && s.project.toLowerCase().indexOf(text) >= 0) ||
-        (s.all_messages && s.all_messages.toLowerCase().indexOf(text) >= 0);
+      return (s.project_name && normalizeSearchText(s.project_name).indexOf(text) >= 0) ||
+        (s.project && normalizeSearchText(s.project).indexOf(text) >= 0) ||
+        (s.all_messages && s.all_messages.indexOf(text) >= 0);
     });
   }
   // Sort pinned sessions to the top, in pin order.

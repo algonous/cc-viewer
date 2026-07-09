@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/algonous/md2html/md2html"
 )
 
 // Claude history line.
@@ -130,7 +132,7 @@ func loadCodexSessions(codexDir string) ([]SessionSummary, error) {
 		}
 		g.s.MessageCount++
 		if e.Text != "" {
-			g.ms = append(g.ms, e.Text)
+			g.ms = append(g.ms, searchIndexText(e.Text))
 		}
 		ts := normalizeEpochMillis(e.TS)
 		if ts < g.s.FirstTS {
@@ -247,11 +249,11 @@ func loadClaudeSessions(claudeDir string) ([]SessionSummary, error) {
 		}
 		s.MessageCount++
 		if e.Display != "" && e.Display != "exit" {
-			messages[rawID] = append(messages[rawID], e.Display)
+			messages[rawID] = append(messages[rawID], searchIndexText(e.Display))
 		}
 		for _, pc := range e.PastedContents {
 			if pc.Content != "" {
-				messages[rawID] = append(messages[rawID], pc.Content)
+				messages[rawID] = append(messages[rawID], searchIndexText(pc.Content))
 			}
 		}
 		if e.Timestamp < s.FirstTS {
@@ -310,7 +312,7 @@ func discoverClaudeOrphans(claudeDir string, groups map[string]*SessionSummary, 
 				continue
 			}
 			groups[rawID] = s
-			messages[rawID] = []string{s.FirstMessage}
+			messages[rawID] = []string{searchIndexText(s.FirstMessage)}
 			*order = append(*order, rawID)
 		}
 	}
@@ -435,6 +437,7 @@ func extractCodexTranscriptTexts(path string) []string {
 	var texts []string
 	seen := map[string]bool{}
 	addText := func(text string) {
+		text = searchIndexText(text)
 		if text == "" || seen[text] {
 			return
 		}
@@ -499,6 +502,14 @@ func codexResponseItemTexts(ri *codexPayloadResponseItem) []string {
 		}
 	}
 	return texts
+}
+
+func searchIndexText(text string) string {
+	plain, err := md2html.MarkdownToPlainText(text)
+	if err != nil {
+		plain = text
+	}
+	return strings.Join(strings.Fields(strings.ToLower(plain)), " ")
 }
 
 func indexClaudeTranscriptText(claudeDir string, groups map[string]*SessionSummary, messages map[string][]string) {
@@ -598,7 +609,7 @@ func extractClaudeTranscriptTexts(path string) []string {
 			if len(content) > 0 && content[0] == '"' {
 				var text string
 				if json.Unmarshal(msg.Content, &text) == nil && text != "" {
-					texts = append(texts, text)
+					texts = append(texts, searchIndexText(text))
 				}
 			}
 		case "assistant":
@@ -612,7 +623,7 @@ func extractClaudeTranscriptTexts(path string) []string {
 				if json.Unmarshal(msg.Content, &blocks) == nil {
 					for _, b := range blocks {
 						if b.Type == "text" && b.Text != "" {
-							texts = append(texts, b.Text)
+							texts = append(texts, searchIndexText(b.Text))
 						}
 					}
 				}
@@ -671,11 +682,11 @@ func ParseHistoryLineForSource(line []byte, source, rootDir string) *SessionUpda
 		}
 		var searchTexts []string
 		if e.Display != "" && e.Display != "exit" {
-			searchTexts = append(searchTexts, e.Display)
+			searchTexts = append(searchTexts, searchIndexText(e.Display))
 		}
 		for _, pc := range e.PastedContents {
 			if pc.Content != "" {
-				searchTexts = append(searchTexts, pc.Content)
+				searchTexts = append(searchTexts, searchIndexText(pc.Content))
 			}
 		}
 		return &SessionUpdate{
@@ -700,7 +711,7 @@ func ParseHistoryLineForSource(line []byte, source, rootDir string) *SessionUpda
 			Source:       SourceCodex,
 			DataDir:      rootDir,
 			Display:      e.Text,
-			SearchText:   e.Text,
+			SearchText:   searchIndexText(e.Text),
 			Timestamp:    normalizeEpochMillis(e.TS),
 		}
 	default:

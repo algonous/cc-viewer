@@ -3,7 +3,7 @@ module github.com/algonous/agent-sessions
 go 1.25.0
 
 require (
-	github.com/algonous/md2html v0.0.4-0.20260708072147-1362dec4ac64
+	github.com/algonous/md2html v0.0.4-0.20260709012129-ed106a3cc36e
 	modernc.org/sqlite v1.46.1
 )
 

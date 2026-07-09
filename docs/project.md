@@ -13,7 +13,7 @@ A web-based application that browses Claude Code and Codex conversation history 
 - Token usage tracking per round (input, output, cache read, cache creation)
 - Select blocks with checkboxes, copy text to clipboard
 - Export sessions to JSONL or Markdown (downloads to browser)
-- Filter sessions by project or content
+- Filter sessions by project or rendered content
 - Deep links:
   - `/<sessionId>` opens a session
   - `/<sessionId>/<roundIdx>` opens and scrolls to a round

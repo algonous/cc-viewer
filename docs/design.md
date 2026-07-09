@@ -57,7 +57,7 @@ Processing is the same at startup and live -- each line is handled identically:
 
 Processing differs between startup and client viewing because the work required is different:
 
-- **Startup (lightweight scan)**: only extracts raw text from user and assistant entries for the full-text search index. No round/block structure, no markdown rendering. This avoids rendering markdown for all sessions when no client is looking at them.
+- **Startup (lightweight scan)**: extracts user and assistant text for the full-text search index, then converts markdown to rendered plain text with md2html. No round/block structure and no HTML rendering are built for sessions that no client is viewing.
 - **Client opens a session (full rendering)**: parses round/block structure, renders markdown to HTML (using md2html), and emits block events. Each JSONL entry produces:
   - `user` with string content -> round header + YOU/CONTEXT block (starts a new round)
   - `user` with array content (tool_result) -> skip (no visible block)
@@ -74,7 +74,7 @@ Usage aggregation per round:
 
 1. **Parse history.jsonl backlog** -- process all existing lines for session summaries and exit status.
 2. **Discover orphan sessions** -- scan `projects/*/` for `.jsonl` files not in history.jsonl. Without this, sessions that fell off the 2000-line cap would be invisible despite their transcripts still being on disk. Orphan sessions are treated as exited.
-3. **Build full-text index** -- lightweight scan of all transcript files concurrently, extracting raw text for search.
+3. **Build full-text index** -- lightweight scan of all transcript files concurrently, extracting rendered plain text for search.
 4. **Begin tailing** -- tail layer starts monitoring history.jsonl for new session events. Transcript files are tailed on demand when a client opens a session.
 
 ### Web layer
